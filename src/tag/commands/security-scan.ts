@@ -4,7 +4,6 @@ import { fetchRepoDefaultBranch } from "../../github/data/pr-fetcher";
 import { createPrompt } from "../../create-prompt";
 import { prepareMcpTools } from "../../mcp/install-mcp-server";
 import { normalizeDroidArgs, parseAllowedTools } from "../../utils/parse-tools";
-import { isEntityContext } from "../../github/context";
 import { generateSecurityReportPrompt } from "../../create-prompt/templates/security-report-prompt";
 import type { Octokits } from "../../github/api/client";
 import type { PrepareResult } from "../../prepare/types";
@@ -24,10 +23,6 @@ export async function prepareSecurityScanMode({
   githubToken,
   scanScope,
 }: SecurityScanCommandOptions): Promise<PrepareResult> {
-  if (!isEntityContext(context)) {
-    throw new Error("Security scan command requires an entity event context");
-  }
-
   // Fetch the repository's default branch (could be main, master, develop, etc.)
   const defaultBranch = await fetchRepoDefaultBranch({
     octokits: octokit,

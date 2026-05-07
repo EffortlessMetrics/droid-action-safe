@@ -2,7 +2,11 @@ import * as core from "@actions/core";
 import { checkContainsTrigger } from "../github/validation/trigger";
 import { checkHumanActor } from "../github/validation/actor";
 import { createInitialComment } from "../github/operations/comments/create-initial";
-import { isEntityContext, type ParsedGitHubContext } from "../github/context";
+import {
+  isEntityContext,
+  isAutomationContext,
+  type ParsedGitHubContext,
+} from "../github/context";
 import { extractCommandFromContext } from "../github/utils/command-parser";
 import { prepareFillMode } from "./commands/fill";
 import { prepareReviewMode } from "./commands/review";
@@ -16,6 +20,18 @@ const DROID_APP_BOT_ID = 209825114;
 const SECURITY_REVIEW_MARKER = "## Security Review Summary";
 
 export function shouldTriggerTag(context: GitHubContext): boolean {
+  if (
+    isAutomationContext(context) &&
+    context.inputs.securityScanSchedule &&
+    (context.eventName === "schedule" ||
+      context.eventName === "workflow_dispatch")
+  ) {
+    console.log(
+      `Detected ${context.eventName} security scan schedule, triggering action`,
+    );
+    return true;
+  }
+
   if (!isEntityContext(context)) {
     return false;
   }
@@ -72,6 +88,20 @@ export async function prepareTagExecution({
   octokit,
   githubToken,
 }: PrepareTagOptions): Promise<PrepareResult> {
+  if (
+    isAutomationContext(context) &&
+    context.inputs.securityScanSchedule &&
+    (context.eventName === "schedule" ||
+      context.eventName === "workflow_dispatch")
+  ) {
+    return prepareSecurityScanMode({
+      context,
+      octokit,
+      githubToken,
+      scanScope: { type: "scheduled", days: context.inputs.securityScanDays },
+    });
+  }
+
   if (!isEntityContext(context)) {
     throw new Error("Tag execution requires entity context");
   }

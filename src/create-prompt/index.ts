@@ -13,8 +13,10 @@ import {
   isPullRequestEvent,
   isPullRequestReviewEvent,
   isPullRequestReviewCommentEvent,
+  isAutomationContext,
+  isEntityContext,
 } from "../github/context";
-import type { ParsedGitHubContext } from "../github/context";
+import type { GitHubContext } from "../github/context";
 import type {
   CommonFields,
   PreparedContext,
@@ -71,7 +73,7 @@ export function buildDisallowedToolsString(
 }
 
 export function prepareContext(
-  context: ParsedGitHubContext,
+  context: GitHubContext,
   droidCommentId?: string,
   baseBranch?: string,
   droidBranch?: string,
@@ -106,6 +108,8 @@ export function prepareContext(
     triggerUsername = context.payload.issue?.user?.login;
   } else if (isPullRequestEvent(context)) {
     triggerUsername = context.payload.pull_request?.user?.login;
+  } else if (isAutomationContext(context)) {
+    triggerUsername = context.actor;
   }
 
   if (triggerUsername) {
@@ -147,12 +151,14 @@ type EventBuilderExtras = {
 };
 
 function buildEventData(
-  context: ParsedGitHubContext,
+  context: GitHubContext,
   extras: EventBuilderExtras,
 ): EventData {
   const { commentId, commentBody, baseBranch, droidBranch } = extras;
 
-  const entityNumber = context.entityNumber?.toString();
+  const entityNumber = isEntityContext(context)
+    ? context.entityNumber?.toString()
+    : undefined;
 
   switch (context.eventName) {
     case "pull_request_review_comment":
@@ -273,6 +279,9 @@ function buildEventData(
     }
 
     case "pull_request":
+      if (!isPullRequestEvent(context)) {
+        throw new Error("pull_request event expected pull request payload");
+      }
       if (!context.isPR || !entityNumber) {
         throw new Error("pull_request event requires PR context");
       }
@@ -285,6 +294,20 @@ function buildEventData(
         ...(baseBranch && { baseBranch }),
       };
 
+    case "workflow_dispatch":
+    case "schedule":
+      if (!baseBranch || !droidBranch) {
+        throw new Error(
+          `${context.eventName} event requires baseBranch and droidBranch`,
+        );
+      }
+      return {
+        eventName: context.eventName,
+        isPR: false,
+        baseBranch,
+        droidBranch,
+      };
+
     default:
       throw new Error(`Unsupported event type: ${context.eventName}`);
   }
@@ -293,7 +316,7 @@ function buildEventData(
 export type PromptGenerator = (context: PreparedContext) => string;
 
 export type PromptCreationOptions = {
-  githubContext: ParsedGitHubContext;
+  githubContext: GitHubContext;
   commentId?: number;
   baseBranch?: string;
   droidBranch?: string;

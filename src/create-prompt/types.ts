@@ -92,6 +92,13 @@ type PullRequestTargetEvent = PullRequestBaseEvent & {
   eventName: "pull_request_target";
 };
 
+type AutomationEvent = {
+  eventName: "workflow_dispatch" | "schedule";
+  isPR: false;
+  baseBranch: string;
+  droidBranch: string;
+};
+
 export type EventData =
   | PullRequestReviewCommentEvent
   | PullRequestReviewEvent
@@ -101,7 +108,8 @@ export type EventData =
   | IssueAssignedEvent
   | IssueLabeledEvent
   | PullRequestEvent
-  | PullRequestTargetEvent;
+  | PullRequestTargetEvent
+  | AutomationEvent;
 
 export type ReviewArtifacts = {
   diffPath: string;

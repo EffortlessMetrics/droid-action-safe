@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { IssueCommentEvent } from "@octokit/webhooks-types";
 import { shouldTriggerTag } from "../../src/tag";
-import { createMockContext } from "../mockContext";
+import { createMockAutomationContext, createMockContext } from "../mockContext";
 
 describe("shouldTriggerTag", () => {
   test("returns true when trigger phrase is present", () => {
@@ -64,5 +64,38 @@ describe("shouldTriggerTag", () => {
     });
 
     expect(shouldTriggerTag(contextWithAutomaticSecurityReview)).toBe(true);
+  });
+
+  test("returns true for workflow_dispatch security scan schedule", () => {
+    const context = createMockAutomationContext({
+      eventName: "workflow_dispatch",
+      inputs: {
+        securityScanSchedule: true,
+      },
+    });
+
+    expect(shouldTriggerTag(context)).toBe(true);
+  });
+
+  test("returns true for schedule security scan schedule", () => {
+    const context = createMockAutomationContext({
+      eventName: "schedule",
+      inputs: {
+        securityScanSchedule: true,
+      },
+    });
+
+    expect(shouldTriggerTag(context)).toBe(true);
+  });
+
+  test("returns false for workflow_dispatch without security scan schedule", () => {
+    const context = createMockAutomationContext({
+      eventName: "workflow_dispatch",
+      inputs: {
+        securityScanSchedule: false,
+      },
+    });
+
+    expect(shouldTriggerTag(context)).toBe(false);
   });
 });
