@@ -6,7 +6,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "install-hooks": "bun run scripts/install-hooks.sh",
-    "test": "bun test",
+    "test": "bun test && python3 review-outcome/test_emit.py",
+    "test:review-outcome": "python3 review-outcome/test_emit.py",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
