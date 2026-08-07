@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile a fail-honest Droid review outcome from the validated artifact.
 
-The composite action calls this after the validator.  The validated artifact is
+The composite action calls this after the validator. The validated artifact is
 review evidence, not publication proof, so clean/findings results are accepted
 only when the exact useful review body can also be found in GitHub's submitted
 review list for the observed candidate.
@@ -19,6 +19,15 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable, Iterable
 
 ALLOWED_RESULTS = {"clean", "findings", "not_proven", "stale"}
+REQUIRED_REVIEW_HEADINGS = {
+    "## Review scope",
+    "## Evidence and falsifiers",
+    "## Prior finding dispositions",
+    "## What this establishes",
+    "## Residual risk / not proved",
+    "## Next action",
+}
+FINDING_HEADINGS = {"## Findings", "## No material findings"}
 
 
 @dataclass
@@ -29,6 +38,7 @@ class ReviewOutcome:
     validated_count: int = 0
     approved_inline_count: int = 0
     independent_finding_count: int = 0
+    summary_finding_count: int = 0
     review_body_submitted: bool = False
     observed_head: str = ""
     current_head: str = ""
@@ -49,6 +59,32 @@ def load_validated_artifact(path: pathlib.Path) -> tuple[dict[str, Any] | None, 
     return value, None
 
 
+def useful_review_body_error(body: str, declared_result: str) -> str | None:
+    if not body.strip():
+        return "useful_review_body_missing"
+
+    headings = {
+        line.strip()
+        for line in body.splitlines()
+        if line.strip().startswith("## ")
+    }
+    missing = sorted(REQUIRED_REVIEW_HEADINGS - headings)
+    if missing:
+        normalized = missing[0].removeprefix("## ").lower().replace(" ", "_")
+        return f"useful_review_body_missing_heading:{normalized}"
+
+    present_finding_headings = FINDING_HEADINGS & headings
+    if not present_finding_headings:
+        return "useful_review_body_missing_findings_section"
+    if declared_result == "clean":
+        if "## No material findings" not in headings or "## Findings" in headings:
+            return "clean_review_body_does_not_state_no_material_findings"
+    elif declared_result == "findings" and "## Findings" not in headings:
+        return "findings_review_body_missing_findings_heading"
+
+    return None
+
+
 def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[ReviewOutcome, str]:
     outcome = ReviewOutcome(observed_head=expected_head)
     version = artifact.get("version")
@@ -61,6 +97,7 @@ def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[Review
     meta = artifact.get("meta")
     results = artifact.get("results")
     independent = artifact.get("independentFindings")
+    summary_findings = artifact.get("summaryFindings")
     summary = artifact.get("reviewSummary")
     if not isinstance(meta, dict):
         outcome.not_proven_reason = "validated_meta_not_object"
@@ -70,6 +107,9 @@ def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[Review
         return outcome, ""
     if not isinstance(independent, list):
         outcome.not_proven_reason = "independent_findings_not_array"
+        return outcome, ""
+    if not isinstance(summary_findings, list):
+        outcome.not_proven_reason = "summary_findings_not_array"
         return outcome, ""
     if not isinstance(summary, dict):
         outcome.not_proven_reason = "review_summary_not_object"
@@ -82,6 +122,7 @@ def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[Review
     outcome.observed_head = artifact_head
     if artifact_head != expected_head:
         outcome.review_result = "stale"
+        outcome.publication_result = "not_needed"
         outcome.not_proven_reason = "validated_head_does_not_match_expected_head"
         return outcome, ""
 
@@ -93,6 +134,12 @@ def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[Review
         if isinstance(item, dict) and item.get("status") == "approved"
     )
     outcome.independent_finding_count = len(independent)
+    outcome.summary_finding_count = len(summary_findings)
+    finding_count = (
+        outcome.approved_inline_count
+        + outcome.independent_finding_count
+        + outcome.summary_finding_count
+    )
 
     declared_result = summary.get("result")
     body = summary.get("body")
@@ -100,8 +147,19 @@ def artifact_facts(artifact: dict[str, Any], expected_head: str) -> tuple[Review
     if declared_result not in ALLOWED_RESULTS:
         outcome.not_proven_reason = "review_result_invalid"
         return outcome, ""
-    if not isinstance(body, str) or not body.strip():
+    if not isinstance(body, str):
         outcome.not_proven_reason = "useful_review_body_missing"
+        return outcome, ""
+
+    body_error = useful_review_body_error(body, declared_result)
+    if body_error:
+        outcome.not_proven_reason = body_error
+        return outcome, ""
+    if declared_result == "clean" and finding_count > 0:
+        outcome.not_proven_reason = "clean_result_contains_findings"
+        return outcome, ""
+    if declared_result == "findings" and finding_count == 0:
+        outcome.not_proven_reason = "findings_result_without_structured_findings"
         return outcome, ""
 
     outcome.review_result = declared_result
@@ -137,7 +195,7 @@ def matching_submitted_review(
             isinstance(body, str)
             and body.strip() == normalized_body
             and commit_id == expected_head
-            and state in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+            and state == "COMMENTED"
         ):
             return review
     return None
@@ -292,6 +350,7 @@ def main() -> int:
         "validated-count": outcome.validated_count,
         "approved-inline-count": outcome.approved_inline_count,
         "independent-finding-count": outcome.independent_finding_count,
+        "summary-finding-count": outcome.summary_finding_count,
         "review-body-submitted": outcome.review_body_submitted,
         "observed-head": outcome.observed_head,
         "current-head": outcome.current_head,
