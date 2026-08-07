@@ -79,7 +79,8 @@ Perform both parts:
    * Check evidence integrity: tests and receipts must discriminate the claim rather than mirror or self-attest it.
    * Check external/semantic authority, compatibility, security, migration, packaging, and support where applicable.
    * Recheck prior findings in existing comments and record each durable disposition as fixed, refuted, superseded, or follow-up with evidence.
-   * Look for material findings that Pass 1 missed. Put those in \`independentFindings\`.
+   * Put newly discovered line-anchored findings in \`independentFindings\`.
+   * Put material findings or evidence gaps without a safe inline location in \`summaryFindings\`; they must also appear in the submitted review body.
    * A zero-candidate input still requires this complete independent review.
 
 A clean review is valid. It must state what was examined, what evidence/falsifiers were used, how prior findings were dispositioned, and what remains unproved. Do not manufacture a finding to demonstrate activity.
@@ -89,7 +90,7 @@ A clean review is valid. It must state what was examined, what evidence/falsifie
 Use exactly one:
 
 * \`clean\` — complete review found no material actionable issue.
-* \`findings\` — one or more approved candidate or independent findings remain.
+* \`findings\` — one or more approved candidate, independent inline, or summary finding remains.
 * \`not_proven\` — required diff, claim, evidence, tool, or authority was unavailable or contradictory.
 * \`stale\` — the PR head changed during review, so publication would target a different candidate.
 
@@ -142,6 +143,13 @@ Never use \`approved\` as the overall result. This action provides advisory revi
       "commit_id": "${prHeadSha}"
     }
   ],
+  "summaryFindings": [
+    {
+      "severity": "P1 | P2 | P3",
+      "title": "Finding without a safe inline anchor",
+      "body": "Evidence, effect, and the next bounded action."
+    }
+  ],
   "reviewSummary": {
     "result": "clean | findings | not_proven | stale",
     "body": "## Review scope\\n...\\n\\n## Evidence and falsifiers\\n...\\n\\n## Findings\\n... (or ## No material findings)\\n\\n## Prior finding dispositions\\n- fixed | refuted | superseded | follow-up, with evidence\\n\\n## What this establishes\\n...\\n\\n## Residual risk / not proved\\n...\\n\\n## Next action\\n...",
@@ -154,10 +162,11 @@ Requirements:
 * Use \`commit_id\` = \`${prHeadSha}\` for inline comments.
 * \`results\` MUST have exactly one entry per Pass 1 candidate, in the same order.
 * \`independentFindings\` may be empty, but only after the independent cumulative review.
+* \`summaryFindings\` contains material reviewer-facing items that cannot be safely anchored inline; every entry must appear in \`reviewSummary.body\`.
 * \`reviewSummary.body\` is required for every result, including \`clean\`.
 * \`reviewSummary.body\` MUST contain review scope, evidence/falsifiers, findings or an explicit no-material-findings result, prior finding dispositions, what is established, residual risk/not proved, and next action.
-* \`reviewSummary.result\` is \`findings\` when any approved candidate or independent finding remains.
-* \`reviewSummary.result\` is \`clean\` only when no approved or independent finding remains.
+* \`reviewSummary.result\` is \`findings\` when any approved candidate, independent finding, or summary finding remains.
+* \`reviewSummary.result\` is \`clean\` only when all three finding sets are empty.
 * Use \`not_proven\` rather than clean when required inputs or tools were unavailable.
 
 Tooling note:
@@ -168,8 +177,9 @@ Tooling note:
 
 After writing \`${reviewValidatedPath}\`:
 
-* Collect approved candidate comments and every independent finding.
-* Submit them as one batched review via \`github_pr___submit_review\`.
+* Collect approved candidate comments and every independent inline finding.
+* Render every \`summaryFindings\` entry in \`reviewSummary.body\`.
+* Submit the inline items as one batched review via \`github_pr___submit_review\`.
 * Include \`reviewSummary.body\` as the review \`body\`, even when there are zero inline findings.
 * Do not post comments individually.
 * Do not approve or request changes.
