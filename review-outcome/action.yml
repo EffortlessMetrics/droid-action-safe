@@ -42,8 +42,11 @@ outputs:
     description: Number of approved Pass 1 inline findings.
     value: ${{ steps.outcome.outputs.approved-inline-count }}
   independent-finding-count:
-    description: Number of findings discovered independently by Pass 2.
+    description: Number of line-anchored findings discovered independently by Pass 2.
     value: ${{ steps.outcome.outputs.independent-finding-count }}
+  summary-finding-count:
+    description: Number of reviewer-facing findings without a safe inline anchor.
+    value: ${{ steps.outcome.outputs.summary-finding-count }}
   review-body-submitted:
     description: Whether an exact submitted GitHub review body was verified.
     value: ${{ steps.outcome.outputs.review-body-submitted }}
