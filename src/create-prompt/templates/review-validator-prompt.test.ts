@@ -41,6 +41,8 @@ describe("review validator prompt", () => {
     expect(prompt).toContain("## Review scope");
     expect(prompt).toContain("## Evidence and falsifiers");
     expect(prompt).toContain("## No material findings");
+    expect(prompt).toContain("## Prior finding dispositions");
+    expect(prompt).toContain("fixed | refuted | superseded | follow-up");
     expect(prompt).toContain("## What this establishes");
     expect(prompt).toContain("## Residual risk / not proved");
     expect(prompt).toContain("## Next action");
@@ -55,5 +57,6 @@ describe("review validator prompt", () => {
     expect(prompt).toContain("clean | findings | not_proven | stale");
     expect(prompt).toContain("Use `not_proven` rather than clean");
     expect(prompt).toContain("do not publish findings against a different candidate");
+    expect(prompt).toContain("is `clean` only when no approved or independent finding remains");
   });
 });
