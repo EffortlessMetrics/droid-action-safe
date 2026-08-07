@@ -33,12 +33,12 @@ export function generateReviewValidatorPrompt(
   const includeSuggestions = context.includeSuggestions !== false;
 
   const skillInstruction = includeSuggestions
-    ? "Invoke the 'review' skill to load the review methodology, then execute its **Pass 2: Validation** procedure — including suggestion block rules."
-    : "Invoke the 'review' skill to load the review methodology, then execute its **Pass 2: Validation** procedure. Do NOT include code suggestion blocks.";
+    ? "Invoke the 'review' skill to load the review methodology. Validate Pass 1 candidates, then perform the independent cumulative review below, including suggestion block rules."
+    : "Invoke the 'review' skill to load the review methodology. Validate Pass 1 candidates, then perform the independent cumulative review below. Do NOT include code suggestion blocks.";
 
-  return `You are validating candidate review comments for PR #${prNumber} in ${repoFullName}.
+  return `You are the independent validation and cumulative-review pass for PR #${prNumber} in ${repoFullName}.
 
-IMPORTANT: This is Phase 2 (validator) of a two-pass review pipeline.
+IMPORTANT: This is Phase 2 of a two-pass review pipeline, but it is NOT limited to validating Phase 1 output. Phase 1 candidates are leads. You remain responsible for reviewing the complete PR even when the candidate list is empty, incomplete, or entirely rejected.
 
 ${skillInstruction}
 
@@ -47,30 +47,58 @@ ${skillInstruction}
 * Repo: ${repoFullName}
 * PR Number: ${prNumber}
 * PR Head Ref: ${prHeadRef}
-* PR Head SHA: ${prHeadSha}
+* Observed PR Head SHA: ${prHeadSha}
 * PR Base Ref: ${prBaseRef}
+
+The observed SHA identifies the candidate you read. It is not an approval token and does not make every prior semantic conclusion useless after a later unrelated push.
 
 ### Inputs
 
-Read these files before validating:
+Read all of these before reaching a result:
 * PR Description: \`${descriptionPath}\`
-* Candidates: \`${reviewCandidatesPath}\`
+* Pass 1 Candidates: \`${reviewCandidatesPath}\`
 * Full PR Diff: \`${diffPath}\`
 * Existing Comments: \`${commentsPath}\`
 
-If the diff is large, read in chunks (offset/limit). **Do not proceed until you have read the ENTIRE diff.**
+If the diff is large, read it in chunks. **Do not proceed until you have read the entire cumulative diff and the material PR claim.**
 
-### Critical Requirements
+### Required review work
 
-1. You MUST read and validate **every** candidate before posting anything.
-2. Preserve ordering: keep results in the same order as candidates.
-3. **Posting rule (STRICT):** Only post comments where \`status === "approved"\`. Never post rejected items.
+Perform both parts:
 
-### Output: Write \`${reviewValidatedPath}\`
+1. **Candidate validation**
+   * Read and disposition every Pass 1 candidate.
+   * Preserve candidate order in \`results\`.
+   * Approve only concrete, actionable findings supported by the current diff and repository context.
+   * Reject false positives with a specific reason.
+
+2. **Independent cumulative review**
+   * Reconstruct the PR's claim, non-goals, production consumers, proof, and rollback boundary.
+   * Trace whether the real request/caller/protocol/build/package/runtime path reaches the changed behavior.
+   * Challenge realistic wrong implementations and missing negative/fallback/error behavior.
+   * Check evidence integrity: tests and receipts must discriminate the claim rather than mirror or self-attest it.
+   * Check external/semantic authority, compatibility, security, migration, packaging, and support where applicable.
+   * Look for material findings that Pass 1 missed. Put those in \`independentFindings\`.
+   * A zero-candidate input still requires this complete independent review.
+
+A clean review is valid. It must state what was examined, what evidence/falsifiers were used, and what remains unproved. Do not manufacture a finding to demonstrate activity.
+
+### Result classes
+
+Use exactly one:
+
+* \`clean\` — complete review found no material actionable issue.
+* \`findings\` — one or more approved candidate or independent findings remain.
+* \`not_proven\` — required diff, claim, evidence, tool, or authority was unavailable or contradictory.
+* \`stale\` — the PR head changed during review, so publication would target a different candidate.
+
+Never use \`approved\` as the overall result. This action provides advisory review evidence; it does not approve the pull request or authorize merge.
+
+### Output: write \`${reviewValidatedPath}\`
 
 \`\`\`json
 {
-  "version": 1,
+  "version": 2,
   "meta": {
     "repo": "${repoFullName}",
     "prNumber": ${prNumber},
@@ -83,7 +111,7 @@ If the diff is large, read in chunks (offset/limit). **Do not proceed until you 
       "status": "approved",
       "comment": {
         "path": "src/index.ts",
-        "body": "[P1] Title\\n\\n1 paragraph.",
+        "body": "[P1] Title\\n\\nEvidence-backed finding.",
         "line": 42,
         "startLine": null,
         "side": "RIGHT",
@@ -103,30 +131,46 @@ If the diff is large, read in chunks (offset/limit). **Do not proceed until you 
       "reason": "Not a real bug because ..."
     }
   ],
+  "independentFindings": [
+    {
+      "path": "src/missed.ts",
+      "body": "[P1] Pass 2 finding\\n\\nEvidence-backed finding missed by Pass 1.",
+      "line": 24,
+      "startLine": null,
+      "side": "RIGHT",
+      "commit_id": "${prHeadSha}"
+    }
+  ],
   "reviewSummary": {
-    "status": "approved",
-    "body": "1-3 sentence overall assessment"
+    "result": "clean | findings | not_proven | stale",
+    "body": "## Review scope\\n...\\n\\n## Evidence and falsifiers\\n...\\n\\n## Findings\\n... (or ## No material findings)\\n\\n## What this establishes\\n...\\n\\n## Residual risk / not proved\\n...\\n\\n## Next action\\n...",
+    "notProvenReason": null
   }
 }
 \`\`\`
 
-Notes:
-* Use \`commit_id\` = \`${prHeadSha}\`.
-* \`results\` MUST have exactly one entry per candidate, in the same order.
+Requirements:
+* Use \`commit_id\` = \`${prHeadSha}\` for inline comments.
+* \`results\` MUST have exactly one entry per Pass 1 candidate, in the same order.
+* \`independentFindings\` may be empty, but only after the independent cumulative review.
+* \`reviewSummary.body\` is required for every result, including \`clean\`.
+* \`reviewSummary.result\` is \`findings\` when any approved candidate or independent finding remains.
+* Use \`not_proven\` rather than clean when required inputs or tools were unavailable.
 
 Tooling note:
-* If the tools list includes \`ApplyPatch\` (common for OpenAI models like GPT-5.2), use \`ApplyPatch\` to create/update the file at the exact path.
-* Otherwise, use \`Create\` (or \`Edit\` if overwriting) to write the file.
+* If the tools list includes \`ApplyPatch\`, use it to create/update the exact output path.
+* Otherwise use \`Create\` (or \`Edit\` if overwriting).
 
-### Post approved items
+### Publish one useful review
 
-After writing \`${reviewValidatedPath}\`, post comments ONLY for \`status === "approved"\`:
+After writing \`${reviewValidatedPath}\`:
 
-* Collect all approved comments and submit them as a **single batched review** via \`github_pr___submit_review\`, passing them in the \`comments\` array parameter.
-* Do **NOT** post comments individually — batch them all into one \`submit_review\` call.
-* Do **NOT** include a \`body\` parameter in \`submit_review\`.
-* Use \`github_comment___update_droid_comment\` to update the tracking comment with the review summary.
-* Do **NOT** post the summary as a separate comment or as the body of \`submit_review\`.
+* Collect approved candidate comments and every independent finding.
+* Submit them as one batched review via \`github_pr___submit_review\`.
+* Include \`reviewSummary.body\` as the review \`body\`, even when there are zero inline findings.
+* Do not post comments individually.
 * Do not approve or request changes.
+* Use \`github_comment___update_droid_comment\` only for a concise tracking summary and job link; the submitted review is the durable judgment.
+* If the observed head no longer matches the PR, do not publish findings against a different candidate. Record \`stale\` and explain the changed seam needed for a later focused review.
 `;
 }
