@@ -30,6 +30,8 @@ describe("review validator prompt", () => {
     expect(prompt).toContain("A zero-candidate input still requires");
     expect(prompt).toContain("material findings that Pass 1 missed");
     expect(prompt).toContain('"independentFindings"');
+    expect(prompt).toContain('"summaryFindings"');
+    expect(prompt).toContain("without a safe inline location");
   });
 
   test("requires a useful durable review body for clean results", () => {
@@ -57,6 +59,6 @@ describe("review validator prompt", () => {
     expect(prompt).toContain("clean | findings | not_proven | stale");
     expect(prompt).toContain("Use `not_proven` rather than clean");
     expect(prompt).toContain("do not publish findings against a different candidate");
-    expect(prompt).toContain("is `clean` only when no approved or independent finding remains");
+    expect(prompt).toContain("is `clean` only when all three finding sets are empty");
   });
 });
