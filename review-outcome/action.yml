@@ -1,0 +1,82 @@
+name: Droid Review Outcome
+description: >-
+  Compile semantic Droid review outputs from review_validated.json and verify
+  that the exact useful review body was submitted to GitHub for the observed PR
+  head.
+
+inputs:
+  validated-path:
+    description: Path to the validator's review_validated.json artifact.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  pr-number:
+    description: Pull request number.
+    required: true
+  expected-head:
+    description: Candidate head SHA observed by the validator.
+    required: true
+  github-token:
+    description: Token with pull-request read access.
+    required: true
+  receipt-path:
+    description: Optional path for the compiled review outcome JSON.
+    required: false
+    default: ''
+
+outputs:
+  review-result:
+    description: Semantic review result: clean, findings, not_proven, or stale.
+    value: ${{ steps.outcome.outputs.review-result }}
+  publication-result:
+    description: Publication result: posted, not_needed, or not_proven.
+    value: ${{ steps.outcome.outputs.publication-result }}
+  candidate-count:
+    description: Number of Pass 1 candidates validated.
+    value: ${{ steps.outcome.outputs.candidate-count }}
+  validated-count:
+    description: Number of Pass 1 candidate dispositions emitted.
+    value: ${{ steps.outcome.outputs.validated-count }}
+  approved-inline-count:
+    description: Number of approved Pass 1 inline findings.
+    value: ${{ steps.outcome.outputs.approved-inline-count }}
+  independent-finding-count:
+    description: Number of line-anchored findings discovered independently by Pass 2.
+    value: ${{ steps.outcome.outputs.independent-finding-count }}
+  summary-finding-count:
+    description: Number of reviewer-facing findings without a safe inline anchor.
+    value: ${{ steps.outcome.outputs.summary-finding-count }}
+  review-body-submitted:
+    description: Whether an exact submitted GitHub review body was verified.
+    value: ${{ steps.outcome.outputs.review-body-submitted }}
+  observed-head:
+    description: Candidate SHA recorded by the validator artifact.
+    value: ${{ steps.outcome.outputs.observed-head }}
+  current-head:
+    description: PR head observed while verifying publication.
+    value: ${{ steps.outcome.outputs.current-head }}
+  not-proven-reason:
+    description: Bounded reason when review or publication is not proved.
+    value: ${{ steps.outcome.outputs.not-proven-reason }}
+  submitted-review-id:
+    description: GitHub review ID matching the useful body and observed head.
+    value: ${{ steps.outcome.outputs.submitted-review-id }}
+  receipt-path:
+    description: Path to the compiled outcome JSON.
+    value: ${{ steps.outcome.outputs.receipt-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compile and verify review outcome
+      id: outcome
+      shell: bash
+      env:
+        VALIDATED_PATH: ${{ inputs.validated-path }}
+        REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        EXPECTED_HEAD: ${{ inputs.expected-head }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        RECEIPT_PATH: ${{ inputs.receipt-path }}
+      run: python3 "$GITHUB_ACTION_PATH/emit.py"
