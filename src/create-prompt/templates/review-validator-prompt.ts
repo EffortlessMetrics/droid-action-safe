@@ -78,10 +78,11 @@ Perform both parts:
    * Challenge realistic wrong implementations and missing negative/fallback/error behavior.
    * Check evidence integrity: tests and receipts must discriminate the claim rather than mirror or self-attest it.
    * Check external/semantic authority, compatibility, security, migration, packaging, and support where applicable.
+   * Recheck prior findings in existing comments and record each durable disposition as fixed, refuted, superseded, or follow-up with evidence.
    * Look for material findings that Pass 1 missed. Put those in \`independentFindings\`.
    * A zero-candidate input still requires this complete independent review.
 
-A clean review is valid. It must state what was examined, what evidence/falsifiers were used, and what remains unproved. Do not manufacture a finding to demonstrate activity.
+A clean review is valid. It must state what was examined, what evidence/falsifiers were used, how prior findings were dispositioned, and what remains unproved. Do not manufacture a finding to demonstrate activity.
 
 ### Result classes
 
@@ -143,7 +144,7 @@ Never use \`approved\` as the overall result. This action provides advisory revi
   ],
   "reviewSummary": {
     "result": "clean | findings | not_proven | stale",
-    "body": "## Review scope\\n...\\n\\n## Evidence and falsifiers\\n...\\n\\n## Findings\\n... (or ## No material findings)\\n\\n## What this establishes\\n...\\n\\n## Residual risk / not proved\\n...\\n\\n## Next action\\n...",
+    "body": "## Review scope\\n...\\n\\n## Evidence and falsifiers\\n...\\n\\n## Findings\\n... (or ## No material findings)\\n\\n## Prior finding dispositions\\n- fixed | refuted | superseded | follow-up, with evidence\\n\\n## What this establishes\\n...\\n\\n## Residual risk / not proved\\n...\\n\\n## Next action\\n...",
     "notProvenReason": null
   }
 }
@@ -154,7 +155,9 @@ Requirements:
 * \`results\` MUST have exactly one entry per Pass 1 candidate, in the same order.
 * \`independentFindings\` may be empty, but only after the independent cumulative review.
 * \`reviewSummary.body\` is required for every result, including \`clean\`.
+* \`reviewSummary.body\` MUST contain review scope, evidence/falsifiers, findings or an explicit no-material-findings result, prior finding dispositions, what is established, residual risk/not proved, and next action.
 * \`reviewSummary.result\` is \`findings\` when any approved candidate or independent finding remains.
+* \`reviewSummary.result\` is \`clean\` only when no approved or independent finding remains.
 * Use \`not_proven\` rather than clean when required inputs or tools were unavailable.
 
 Tooling note:
