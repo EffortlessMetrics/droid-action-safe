@@ -9,6 +9,10 @@ inputs:
     description: "GitHub token (optional - will use OIDC if not provided)"
     required: false
     default: ""
+  expected_head_sha:
+    description: "Optional full PR head SHA that this invocation must consume"
+    required: false
+    default: ""
   tracking_comment_id:
     description: "ID of the tracking comment to update"
     required: true
@@ -121,6 +125,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ steps.token.outputs.github_token }}
         DROID_COMMENT_ID: ${{ inputs.tracking_comment_id }}
+        EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         SECURITY_MODEL: ${{ inputs.security_model }}
         SECURITY_SEVERITY_THRESHOLD: ${{ inputs.security_severity_threshold }}
         SECURITY_BLOCK_ON_CRITICAL: ${{ inputs.security_block_on_critical }}

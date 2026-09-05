@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import { execSync } from "child_process";
+import { checkoutPullRequestHead } from "../../github/validation/expected-head";
 import type { GitHubContext } from "../../github/context";
 import { fetchPRBranchData } from "../../github/data/pr-fetcher";
 import { computeReviewArtifacts } from "../../github/data/review-artifacts";
@@ -49,25 +49,21 @@ export async function prepareReviewMode({
     currentBranch: prData.headRefName,
   };
 
-  // Checkout the PR branch before computing diff
-  // This ensures HEAD points to the PR head commit, not the merge commit or default branch
+  // Pin review inputs to the authorized PR head when supplied.
   console.log(
-    `Checking out PR #${context.entityNumber} branch for diff computation...`,
+    `Checking out PR #${context.entityNumber} head for diff computation...`,
   );
   try {
-    execSync("git reset --hard HEAD", { encoding: "utf8", stdio: "pipe" });
-    execSync(`gh pr checkout ${context.entityNumber}`, {
-      encoding: "utf8",
-      stdio: "pipe",
-      env: { ...process.env, GH_TOKEN: githubToken },
+    const checkedOutHead = checkoutPullRequestHead({
+      prData,
+      prNumber: context.entityNumber,
+      githubToken,
     });
-    console.log(
-      `Successfully checked out PR branch: ${execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim()}`,
-    );
-  } catch (e) {
-    console.error(`Failed to checkout PR branch: ${e}`);
+    console.log(`Checked out review head: ${checkedOutHead}`);
+  } catch (error) {
+    console.error(`Failed to checkout PR head: ${error}`);
     throw new Error(
-      `Failed to checkout PR #${context.entityNumber} branch for review`,
+      `Failed to checkout PR #${context.entityNumber} head for review`,
     );
   }
 

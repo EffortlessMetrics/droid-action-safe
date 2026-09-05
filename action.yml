@@ -39,6 +39,10 @@ inputs:
     description: "GitHub token with repo and pull request permissions (optional if using GitHub App)"
     required: false
 
+  expected_head_sha:
+    description: "Optional full PR head SHA. When set, fail if live PR metadata differs; review and security detach this exact commit from the caller checkout."
+    required: false
+    default: ""
   droid_args:
     description: "Additional arguments to pass directly to Droid CLI"
     required: false
@@ -176,6 +180,7 @@ runs:
         ASSIGNEE_TRIGGER: ${{ inputs.assignee_trigger }}
         LABEL_TRIGGER: ${{ inputs.label_trigger }}
         OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
+        EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         ALLOWED_BOTS: ${{ inputs.allowed_bots }}
         ALLOWED_NON_WRITE_USERS: ${{ inputs.allowed_non_write_users }}
         GITHUB_RUN_ID: ${{ github.run_id }}
