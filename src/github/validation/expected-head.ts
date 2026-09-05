@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import * as childProcess from "child_process";
 import type { PRBranchData } from "../data/pr-fetcher";
 
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
@@ -15,7 +15,7 @@ export type CommandRunner = (
 ) => string;
 
 const defaultRun: CommandRunner = (command, options) =>
-  execSync(command, options).toString();
+  childProcess.execSync(command, options).toString();
 
 export function readExpectedHeadSha(
   raw = process.env.EXPECTED_HEAD_SHA,
