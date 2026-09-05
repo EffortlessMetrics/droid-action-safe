@@ -10,6 +10,10 @@ import { normalizeDroidArgs, parseAllowedTools } from "../../utils/parse-tools";
 import type { PrepareResult } from "../../prepare/types";
 import { generateReviewValidatorPrompt } from "../../create-prompt/templates/review-validator-prompt";
 import { resolveReviewConfig } from "../../utils/review-depth";
+import {
+  buildReviewTools,
+  isReadOnlyReviewEnabled,
+} from "./review-tools";
 
 export async function prepareReviewValidatorMode({
   context,
@@ -35,9 +39,6 @@ export async function prepareReviewValidatorMode({
     prNumber: context.entityNumber,
   });
 
-  // The PR branch is already checked out and review artifacts (diff,
-  // comments, description) were already computed by the generate-review-prompt
-  // step earlier in this job. Reuse them from disk instead of recomputing.
   const tempDir = process.env.RUNNER_TEMP || "/tmp";
   const promptsDir = `${tempDir}/droid-prompts`;
   const reviewArtifacts: ReviewArtifacts = {
@@ -69,24 +70,13 @@ export async function prepareReviewValidatorMode({
   const userAllowedMCPTools = parseAllowedTools(normalizedUserArgs).filter(
     (tool) => tool.startsWith("github_") && tool.includes("___"),
   );
-
-  const baseTools = [
-    "Read",
-    "Grep",
-    "Glob",
-    "LS",
-    "Execute",
-    "ApplyPatch",
-    "Create",
-    "Edit",
-    "github_comment___update_droid_comment",
-  ];
-
-  const validatorTools = ["github_pr___submit_review"];
-
-  const allowedTools = Array.from(
-    new Set([...baseTools, ...validatorTools, ...userAllowedMCPTools]),
-  );
+  const readOnly = isReadOnlyReviewEnabled();
+  const allowedTools = buildReviewTools({
+    phase: "validator",
+    normalizedUserArgs,
+    userAllowedMCPTools,
+    readOnly,
+  });
 
   const mcpTools = await prepareMcpTools({
     githubToken,
@@ -115,7 +105,7 @@ export async function prepareReviewValidatorMode({
     droidArgParts.push(`--reasoning-effort "${reasoningEffort}"`);
   }
 
-  if (normalizedUserArgs) {
+  if (normalizedUserArgs && !readOnly) {
     droidArgParts.push(normalizedUserArgs);
   }
 
