@@ -5,7 +5,7 @@
  */
 
 import * as core from "@actions/core";
-import { execSync } from "child_process";
+import { checkoutPullRequestHead } from "../github/validation/expected-head";
 import { createOctokit } from "../github/api/client";
 import { parseGitHubContext, isEntityContext } from "../github/context";
 import { fetchPRBranchData } from "../github/data/pr-fetcher";
@@ -16,6 +16,10 @@ import { generateReviewCandidatesPrompt } from "../create-prompt/templates/revie
 import { generateSecurityCandidatesPrompt } from "../create-prompt/templates/security-review-prompt";
 import { normalizeDroidArgs, parseAllowedTools } from "../utils/parse-tools";
 import { resolveReviewConfig } from "../utils/review-depth";
+import {
+  buildReviewTools,
+  isReadOnlyReviewEnabled,
+} from "../tag/commands/review-tools";
 
 async function run() {
   try {
@@ -50,29 +54,22 @@ async function run() {
       currentBranch: prData.headRefName,
     };
 
-    // Pre-compute review artifacts (diff, existing comments, PR description)
-    // so the Droid can read them directly instead of fetching via gh CLI
     const tempDir = process.env.RUNNER_TEMP || "/tmp";
 
-    // Checkout the PR branch before computing diff to ensure HEAD points
-    // to the PR head commit, not the merge commit
     console.log(
-      `Checking out PR #${context.entityNumber} branch for diff computation...`,
+      `Checking out PR #${context.entityNumber} head for diff computation...`,
     );
     try {
-      execSync("git reset --hard HEAD", { encoding: "utf8", stdio: "pipe" });
-      execSync(`gh pr checkout ${context.entityNumber}`, {
-        encoding: "utf8",
-        stdio: "pipe",
-        env: { ...process.env, GH_TOKEN: githubToken },
+      const checkedOutHead = checkoutPullRequestHead({
+        prData,
+        prNumber: context.entityNumber,
+        githubToken,
       });
-      console.log(
-        `Successfully checked out PR branch: ${execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim()}`,
-      );
-    } catch (e) {
-      console.error(`Failed to checkout PR branch: ${e}`);
+      console.log(`Checked out review head: ${checkedOutHead}`);
+    } catch (error) {
+      console.error(`Failed to checkout PR head: ${error}`);
       throw new Error(
-        `Failed to checkout PR #${context.entityNumber} branch for review`,
+        `Failed to checkout PR #${context.entityNumber} head for review`,
       );
     }
 
@@ -88,14 +85,11 @@ async function run() {
       githubToken,
     });
 
-    // Select prompt generator based on review type
     const generatePrompt =
       reviewType === "security"
         ? generateSecurityCandidatesPrompt
         : generateReviewCandidatesPrompt;
 
-    // Pass the output file path so the prompt can instruct the Droid
-    // to write structured findings for the combine step
     const outputFilePath = process.env.DROID_OUTPUT_FILE || undefined;
     const includeSuggestions = process.env.INCLUDE_SUGGESTIONS !== "false";
 
@@ -113,7 +107,6 @@ async function run() {
       includeSuggestions,
     });
 
-    // Set run type
     const runType =
       reviewType === "security" ? "droid-security-review" : "droid-review";
     core.exportVariable("DROID_EXEC_RUN_TYPE", runType);
@@ -123,39 +116,13 @@ async function run() {
     const userAllowedMCPTools = parseAllowedTools(normalizedUserArgs).filter(
       (tool) => tool.startsWith("github_") && tool.includes("___"),
     );
-
-    // Base tools for analysis
-    const baseTools = [
-      "Read",
-      "Grep",
-      "Glob",
-      "LS",
-      "Execute",
-      "Edit",
-      "Create",
-      "ApplyPatch",
-      "github_comment___update_droid_comment",
-    ];
-
-    // Task tool is needed for parallel subagent reviews in candidate generation phase.
-    // FetchUrl is needed to fetch linked tickets from the PR description.
-    // Skill is needed so subagents can invoke review/security-review skills.
-    const candidateGenerationTools = ["Task", "FetchUrl", "Skill"];
-
-    const safeUserAllowedMCPTools = userAllowedMCPTools.filter(
-      (tool) =>
-        tool === "github_comment___update_droid_comment" ||
-        (!tool.startsWith("github_pr___") &&
-          tool !== "github_inline_comment___create_inline_comment"),
-    );
-
-    const allowedTools = Array.from(
-      new Set([
-        ...baseTools,
-        ...candidateGenerationTools,
-        ...safeUserAllowedMCPTools,
-      ]),
-    );
+    const readOnly = isReadOnlyReviewEnabled();
+    const allowedTools = buildReviewTools({
+      phase: "candidate",
+      normalizedUserArgs,
+      userAllowedMCPTools,
+      readOnly,
+    });
 
     const mcpTools = await prepareMcpTools({
       githubToken,
@@ -189,14 +156,12 @@ async function run() {
       droidArgParts.push(`--reasoning-effort "${reasoningEffort}"`);
     }
 
-    if (normalizedUserArgs) {
+    if (normalizedUserArgs && !readOnly) {
       droidArgParts.push(normalizedUserArgs);
     }
 
-    // Output for next step - use core.setOutput which handles GITHUB_OUTPUT internally
     core.setOutput("droid_args", droidArgParts.join(" ").trim());
     core.setOutput("mcp_tools", mcpTools);
-    // Both code and security reviews use the two-pass pipeline (candidates + validator)
     core.setOutput("review_use_validator", "true");
 
     console.log(`Generated ${reviewType} review prompt`);
