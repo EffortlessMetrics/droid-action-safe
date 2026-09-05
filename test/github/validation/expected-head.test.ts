@@ -30,7 +30,9 @@ describe("expected PR head contract", () => {
   it("preserves legacy behavior when no expected head is supplied", () => {
     delete process.env.EXPECTED_HEAD_SHA;
     expect(readExpectedHeadSha()).toBeUndefined();
+    expect(readExpectedHeadSha("   \t\n")).toBeUndefined();
     expect(assertExpectedHead(PR_DATA)).toBeUndefined();
+    expect(assertExpectedHead(PR_DATA, "   ")).toBeUndefined();
   });
 
   it("rejects abbreviated and non-hexadecimal expected heads", () => {
