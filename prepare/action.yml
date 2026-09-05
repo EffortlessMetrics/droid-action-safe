@@ -8,6 +8,10 @@ inputs:
   github_token:
     description: "GitHub token"
     required: false
+  expected_head_sha:
+    description: "Optional full PR head SHA that this invocation must consume"
+    required: false
+    default: ""
   automatic_review:
     description: "Run automatic code review"
     required: false
@@ -65,6 +69,7 @@ runs:
       env:
         FACTORY_API_KEY: ${{ inputs.factory_api_key }}
         OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
+        EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         AUTOMATIC_REVIEW: ${{ inputs.automatic_review }}
         AUTOMATIC_SECURITY_REVIEW: ${{ inputs.automatic_security_review }}
         TRIGGER_PHRASE: "@droid"

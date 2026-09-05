@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import type { GitHubContext } from "../../github/context";
 import { fetchPRBranchData } from "../../github/data/pr-fetcher";
+import { assertExpectedHead } from "../../github/validation/expected-head";
 import { generateFillPrompt } from "../../create-prompt/templates/fill-prompt";
 import { createPrompt } from "../../create-prompt";
 import { prepareMcpTools } from "../../mcp/install-mcp-server";
@@ -39,6 +40,8 @@ export async function prepareFillMode({
     repository: context.repository,
     prNumber: context.entityNumber,
   });
+
+  assertExpectedHead(prData);
 
   const branchInfo = {
     baseBranch: prData.baseRefName,
