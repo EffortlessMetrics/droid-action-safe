@@ -1,0 +1,505 @@
+name: Temporary Expected Head Contract Patch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/expected-head-contract-temporary.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: expected-head-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  patch-and-verify:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/expected-pr-head-contract'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.2.11
+
+      - name: Apply expected-head contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def expression(value: str) -> str:
+              return "$" + "{{ " + value + " }}"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement target, found {count}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_section(path: str, start: str, end: str, replacement: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              start_index = text.find(start)
+              if start_index < 0:
+                  raise SystemExit(f"{path}: start marker not found: {start!r}")
+              end_index = text.find(end, start_index)
+              if end_index < 0:
+                  raise SystemExit(f"{path}: end marker not found: {end!r}")
+              if text.find(start, start_index + 1) >= 0:
+                  raise SystemExit(f"{path}: start marker is not unique")
+              file.write_text(
+                  text[:start_index] + replacement + text[end_index:],
+                  encoding="utf-8",
+              )
+
+          helper = '''import { execSync } from "child_process";
+          import type { PRBranchData } from "../data/pr-fetcher";
+
+          const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
+
+          export type CommandOptions = {
+            encoding: "utf8";
+            stdio: "pipe";
+            env?: NodeJS.ProcessEnv;
+          };
+
+          export type CommandRunner = (
+            command: string,
+            options: CommandOptions,
+          ) => string;
+
+          const defaultRun: CommandRunner = (command, options) =>
+            execSync(command, options).toString();
+
+          export function readExpectedHeadSha(
+            raw = process.env.EXPECTED_HEAD_SHA,
+          ): string | undefined {
+            const expected = raw?.trim();
+            if (!expected) {
+              return undefined;
+            }
+            if (!FULL_COMMIT_SHA.test(expected)) {
+              throw new Error(
+                "expected_head_sha must be a full 40-character hexadecimal commit SHA",
+              );
+            }
+            return expected.toLowerCase();
+          }
+
+          export function assertExpectedHead(
+            prData: PRBranchData,
+            raw = process.env.EXPECTED_HEAD_SHA,
+          ): string | undefined {
+            const expected = readExpectedHeadSha(raw);
+            if (!expected) {
+              return undefined;
+            }
+
+            const liveHead = prData.headRefOid.toLowerCase();
+            if (liveHead !== expected) {
+              throw new Error(
+                `PR head changed: expected ${expected}, current head is ${liveHead}`,
+              );
+            }
+            return expected;
+          }
+
+          export function checkoutPullRequestHead({
+            prData,
+            prNumber,
+            githubToken,
+            run = defaultRun,
+          }: {
+            prData: PRBranchData;
+            prNumber: number;
+            githubToken: string;
+            run?: CommandRunner;
+          }): string {
+            if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+              throw new Error(`Invalid pull request number: ${prNumber}`);
+            }
+
+            const options: CommandOptions = {
+              encoding: "utf8",
+              stdio: "pipe",
+            };
+            const expected = assertExpectedHead(prData);
+
+            run("git reset --hard HEAD", options);
+            if (expected) {
+              run(`git cat-file -e ${expected}^{commit}`, options);
+              run(`git checkout --detach ${expected}`, options);
+              const actual = run("git rev-parse HEAD", options).trim().toLowerCase();
+              if (actual !== expected) {
+                throw new Error(
+                  `Exact-head checkout failed: expected ${expected}, checked out ${actual}`,
+                );
+              }
+              return actual;
+            }
+
+            run(`gh pr checkout ${prNumber}`, {
+              ...options,
+              env: { ...process.env, GH_TOKEN: githubToken },
+            });
+            return run("git rev-parse HEAD", options).trim().toLowerCase();
+          }
+          '''
+          Path("src/github/validation/expected-head.ts").write_text(
+              helper, encoding="utf-8"
+          )
+
+          tests = '''import { afterEach, describe, expect, it } from "bun:test";
+          import {
+            assertExpectedHead,
+            checkoutPullRequestHead,
+            readExpectedHeadSha,
+            type CommandRunner,
+          } from "../../../src/github/validation/expected-head";
+
+          const EXPECTED = "a".repeat(40);
+          const OTHER = "b".repeat(40);
+          const PR_DATA = {
+            baseRefName: "main",
+            headRefName: "feature/exact-head",
+            headRefOid: EXPECTED,
+            title: "Exact head",
+            body: "",
+          };
+
+          describe("expected PR head contract", () => {
+            const originalExpectedHead = process.env.EXPECTED_HEAD_SHA;
+
+            afterEach(() => {
+              if (originalExpectedHead === undefined) {
+                delete process.env.EXPECTED_HEAD_SHA;
+              } else {
+                process.env.EXPECTED_HEAD_SHA = originalExpectedHead;
+              }
+            });
+
+            it("preserves legacy behavior when no expected head is supplied", () => {
+              delete process.env.EXPECTED_HEAD_SHA;
+              expect(readExpectedHeadSha()).toBeUndefined();
+              expect(assertExpectedHead(PR_DATA)).toBeUndefined();
+            });
+
+            it("rejects abbreviated and non-hexadecimal expected heads", () => {
+              for (const value of ["abc123", "z".repeat(40), `${EXPECTED}00`]) {
+                expect(() => readExpectedHeadSha(value)).toThrow(
+                  "full 40-character hexadecimal commit SHA",
+                );
+              }
+            });
+
+            it("rejects a PR head that differs from the authorized head", () => {
+              expect(() => assertExpectedHead(PR_DATA, OTHER)).toThrow(
+                `expected ${OTHER}, current head is ${EXPECTED}`,
+              );
+            });
+
+            it("accepts the exact PR head", () => {
+              expect(assertExpectedHead(PR_DATA, EXPECTED.toUpperCase())).toBe(
+                EXPECTED,
+              );
+            });
+
+            it("detaches the exact commit already present in the checkout", () => {
+              process.env.EXPECTED_HEAD_SHA = EXPECTED;
+              const calls: string[] = [];
+              const run: CommandRunner = (command) => {
+                calls.push(command);
+                return command === "git rev-parse HEAD" ? `${EXPECTED}\n` : "";
+              };
+
+              expect(
+                checkoutPullRequestHead({
+                  prData: PR_DATA,
+                  prNumber: 42,
+                  githubToken: "token",
+                  run,
+                }),
+              ).toBe(EXPECTED);
+              expect(calls).toEqual([
+                "git reset --hard HEAD",
+                `git cat-file -e ${EXPECTED}^{commit}`,
+                `git checkout --detach ${EXPECTED}`,
+                "git rev-parse HEAD",
+              ]);
+            });
+
+            it("keeps the existing live checkout path without the optional input", () => {
+              delete process.env.EXPECTED_HEAD_SHA;
+              const calls: Array<{ command: string; token?: string }> = [];
+              const run: CommandRunner = (command, options) => {
+                calls.push({ command, token: options.env?.GH_TOKEN });
+                return command === "git rev-parse HEAD" ? `${EXPECTED}\n` : "";
+              };
+
+              expect(
+                checkoutPullRequestHead({
+                  prData: PR_DATA,
+                  prNumber: 42,
+                  githubToken: "token",
+                  run,
+                }),
+              ).toBe(EXPECTED);
+              expect(calls[1]).toEqual({
+                command: "gh pr checkout 42",
+                token: "token",
+              });
+            });
+          });
+          '''
+          test_path = Path("test/github/validation/expected-head.test.ts")
+          test_path.parent.mkdir(parents=True, exist_ok=True)
+          test_path.write_text(tests, encoding="utf-8")
+
+          expected_input = '''  expected_head_sha:
+            description: "Optional full PR head SHA. When set, fail if live PR metadata differs; review and security detach this exact commit from the caller checkout."
+            required: false
+            default: ""
+          '''
+
+          replace_once(
+              "action.yml",
+              '''  github_token:
+            description: "GitHub token with repo and pull request permissions (optional if using GitHub App)"
+            required: false
+
+            droid_args:
+          ''',
+              '''  github_token:
+            description: "GitHub token with repo and pull request permissions (optional if using GitHub App)"
+            required: false
+            expected_head_sha:
+            description: "Optional full PR head SHA. When set, fail if live PR metadata differs; review and security detach this exact commit from the caller checkout."
+            required: false
+            default: ""
+
+            droid_args:
+          ''',
+          )
+          token_line = "        OVERRIDE_GITHUB_TOKEN: " + expression("inputs.github_token") + "\n"
+          replace_once(
+              "action.yml",
+              token_line,
+              token_line + "        EXPECTED_HEAD_SHA: " + expression("inputs.expected_head_sha") + "\n",
+          )
+
+          for path in ("review/action.yml", "security/action.yml"):
+              replace_once(
+                  path,
+                  '''  github_token:
+            description: "GitHub token (optional - will use OIDC if not provided)"
+            required: false
+            default: ""
+            tracking_comment_id:
+          ''',
+                  '''  github_token:
+            description: "GitHub token (optional - will use OIDC if not provided)"
+            required: false
+            default: ""
+            expected_head_sha:
+            description: "Optional full PR head SHA that this review must consume"
+            required: false
+            default: ""
+            tracking_comment_id:
+          ''',
+              )
+              github_line = "        GITHUB_TOKEN: " + expression("steps.token.outputs.github_token") + "\n"
+              replace_once(
+                  path,
+                  github_line,
+                  github_line + "        EXPECTED_HEAD_SHA: " + expression("inputs.expected_head_sha") + "\n",
+              )
+
+          replace_once(
+              "prepare/action.yml",
+              '''  github_token:
+            description: "GitHub token"
+            required: false
+            automatic_review:
+          ''',
+              '''  github_token:
+            description: "GitHub token"
+            required: false
+            expected_head_sha:
+            description: "Optional full PR head SHA that this preparation must consume"
+            required: false
+            default: ""
+            automatic_review:
+          ''',
+          )
+          prepare_token = "        OVERRIDE_GITHUB_TOKEN: " + expression("inputs.github_token") + "\n"
+          replace_once(
+              "prepare/action.yml",
+              prepare_token,
+              prepare_token + "        EXPECTED_HEAD_SHA: " + expression("inputs.expected_head_sha") + "\n",
+          )
+
+          replace_once(
+              "src/tag/commands/review.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/tag/commands/review.ts",
+              "  // Checkout the PR branch before computing diff\n",
+              "  // Pre-compute review artifacts",
+              '''  // Pin review inputs to the authorized PR head when supplied.
+            console.log(
+              `Checking out PR #${context.entityNumber} head for diff computation...`,
+            );
+            try {
+              const checkedOutHead = checkoutPullRequestHead({
+                prData,
+                prNumber: context.entityNumber,
+                githubToken,
+              });
+              console.log(`Checked out review head: ${checkedOutHead}`);
+            } catch (error) {
+              console.error(`Failed to checkout PR head: ${error}`);
+              throw new Error(
+                `Failed to checkout PR #${context.entityNumber} head for review`,
+              );
+            }
+
+            ''',
+          )
+
+          replace_once(
+              "src/tag/commands/security-review.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/tag/commands/security-review.ts",
+              "  // Checkout the PR branch before computing diff\n",
+              "  // Pre-compute review artifacts",
+              '''  // Pin review inputs to the authorized PR head when supplied.
+            console.log(
+              `Checking out PR #${context.entityNumber} head for diff computation...`,
+            );
+            try {
+              const checkedOutHead = checkoutPullRequestHead({
+                prData,
+                prNumber: context.entityNumber,
+                githubToken,
+              });
+              console.log(`Checked out security-review head: ${checkedOutHead}`);
+            } catch (error) {
+              console.error(`Failed to checkout PR head: ${error}`);
+              throw new Error(
+                `Failed to checkout PR #${context.entityNumber} head for security review`,
+              );
+            }
+
+            ''',
+          )
+
+          replace_once(
+              "src/tag/commands/fill.ts",
+              'import { fetchPRBranchData } from "../../github/data/pr-fetcher";\n',
+              'import { fetchPRBranchData } from "../../github/data/pr-fetcher";\nimport { assertExpectedHead } from "../../github/validation/expected-head";\n',
+          )
+          fill_fetch = '''  const prData = await fetchPRBranchData({
+            octokits: octokit,
+            repository: context.repository,
+            prNumber: context.entityNumber,
+          });
+          '''
+          replace_once(
+              "src/tag/commands/fill.ts",
+              fill_fetch,
+              fill_fetch + "\n  assertExpectedHead(prData);\n",
+          )
+
+          replace_once(
+              "src/entrypoints/generate-review-prompt.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/entrypoints/generate-review-prompt.ts",
+              "    // Checkout the PR branch before computing diff to ensure HEAD points\n",
+              "    const reviewArtifacts",
+              '''    // Pin review inputs to the authorized PR head when supplied.
+              console.log(
+                `Checking out PR #${context.entityNumber} head for diff computation...`,
+              );
+              try {
+                const checkedOutHead = checkoutPullRequestHead({
+                  prData,
+                  prNumber: context.entityNumber,
+                  githubToken,
+                });
+                console.log(`Checked out review head: ${checkedOutHead}`);
+              } catch (error) {
+                console.error(`Failed to checkout PR head: ${error}`);
+                throw new Error(
+                  `Failed to checkout PR #${context.entityNumber} head for review`,
+                );
+              }
+
+              ''',
+          )
+
+          Path("docs/expected-head.md").write_text(
+              '''# Expected pull-request head
+
+          The optional `expected_head_sha` input binds a Droid invocation to one full,
+          40-character pull-request head SHA. The action reads the live pull-request
+          metadata and fails before generating a prompt when that head does not match.
+
+          Review and security modes additionally require the expected commit to already
+          exist in the caller's checkout, then detach that exact commit before computing
+          the diff. They do not replace it with a later mutable branch head. Fill mode
+          consumes the matching metadata snapshot but does not change the source tree.
+
+          Callers should check out the captured SHA before invoking the action and retain
+          the SHA in their own receipt. A pull request can still advance after the action
+          has captured and validated its inputs; later output therefore belongs to the
+          recorded SHA and may be stale against a subsequent head.
+          ''',
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format, type-check, and test
+        run: |
+          set -euo pipefail
+          bun run format
+          bun run format:check
+          bun run typecheck
+          bun test test/github/validation/expected-head.test.ts
+          bun test
+
+      - name: Commit verified candidate and remove temporary workflow
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/expected-head-contract-temporary.yml
+          git config user.name "EffortlessSteven"
+          git config user.email "git@effortlesssteven.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(review): bind invocations to an expected PR head"
+          git push origin "HEAD:${HEAD_REF}"
