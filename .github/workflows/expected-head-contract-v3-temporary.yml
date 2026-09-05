@@ -1,0 +1,268 @@
+name: Temporary Expected Head Contract Patch v3
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/expected-head-contract-v3-temporary.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: expected-head-contract-v3-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  patch-and-verify:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/expected-pr-head-contract'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.2.11
+
+      - name: Wire expected-head contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def expr(value: str) -> str:
+              return "$" + "{{ " + value + " }}"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one target, found {count}: {old!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_section(path: str, start: str, end: str, replacement: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              if text.count(start) != 1:
+                  raise SystemExit(f"{path}: start marker count is {text.count(start)}")
+              start_at = text.index(start)
+              end_at = text.find(end, start_at)
+              if end_at < 0:
+                  raise SystemExit(f"{path}: end marker missing")
+              file.write_text(text[:start_at] + replacement + text[end_at:], encoding="utf-8")
+
+          main_input = (
+              "  expected_head_sha:\n"
+              "    description: \"Optional full PR head SHA. When set, fail if live PR metadata differs; review and security detach this exact commit from the caller checkout.\"\n"
+              "    required: false\n"
+              "    default: \"\"\n"
+          )
+          standalone_input = (
+              "  expected_head_sha:\n"
+              "    description: \"Optional full PR head SHA that this invocation must consume\"\n"
+              "    required: false\n"
+              "    default: \"\"\n"
+          )
+
+          replace_once("action.yml", "  droid_args:\n", main_input + "  droid_args:\n")
+          main_token = "        OVERRIDE_GITHUB_TOKEN: " + expr("inputs.github_token") + "\n"
+          replace_once(
+              "action.yml",
+              main_token,
+              main_token + "        EXPECTED_HEAD_SHA: " + expr("inputs.expected_head_sha") + "\n",
+          )
+
+          replace_once(
+              "prepare/action.yml",
+              "  automatic_review:\n",
+              standalone_input + "  automatic_review:\n",
+          )
+          prepare_token = "        OVERRIDE_GITHUB_TOKEN: " + expr("inputs.github_token") + "\n"
+          replace_once(
+              "prepare/action.yml",
+              prepare_token,
+              prepare_token + "        EXPECTED_HEAD_SHA: " + expr("inputs.expected_head_sha") + "\n",
+          )
+
+          review_comment = "        DROID_COMMENT_ID: " + expr("inputs.tracking_comment_id") + "\n"
+          replace_once(
+              "review/action.yml",
+              "  tracking_comment_id:\n",
+              standalone_input + "  tracking_comment_id:\n",
+          )
+          review_prompt = review_comment + "        REVIEW_DEPTH: " + expr("inputs.review_depth") + "\n"
+          replace_once(
+              "review/action.yml",
+              review_prompt,
+              review_comment
+              + "        EXPECTED_HEAD_SHA: "
+              + expr("inputs.expected_head_sha")
+              + "\n        REVIEW_DEPTH: "
+              + expr("inputs.review_depth")
+              + "\n",
+          )
+
+          replace_once(
+              "security/action.yml",
+              "  tracking_comment_id:\n",
+              standalone_input + "  tracking_comment_id:\n",
+          )
+          security_prompt = review_comment + "        SECURITY_MODEL: " + expr("inputs.security_model") + "\n"
+          replace_once(
+              "security/action.yml",
+              security_prompt,
+              review_comment
+              + "        EXPECTED_HEAD_SHA: "
+              + expr("inputs.expected_head_sha")
+              + "\n        SECURITY_MODEL: "
+              + expr("inputs.security_model")
+              + "\n",
+          )
+
+          replace_once(
+              "src/tag/commands/review.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/tag/commands/review.ts",
+              "  // Checkout the PR branch before computing diff\n",
+              "  // Pre-compute review artifacts",
+              """  // Pin review inputs to the authorized PR head when supplied.
+          console.log(
+            `Checking out PR #${context.entityNumber} head for diff computation...`,
+          );
+          try {
+            const checkedOutHead = checkoutPullRequestHead({
+              prData,
+              prNumber: context.entityNumber,
+              githubToken,
+            });
+            console.log(`Checked out review head: ${checkedOutHead}`);
+          } catch (error) {
+            console.error(`Failed to checkout PR head: ${error}`);
+            throw new Error(
+              `Failed to checkout PR #${context.entityNumber} head for review`,
+            );
+          }
+
+          """,
+          )
+
+          replace_once(
+              "src/tag/commands/security-review.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/tag/commands/security-review.ts",
+              "  // Checkout the PR branch before computing diff\n",
+              "  // Pre-compute review artifacts",
+              """  // Pin review inputs to the authorized PR head when supplied.
+          console.log(
+            `Checking out PR #${context.entityNumber} head for diff computation...`,
+          );
+          try {
+            const checkedOutHead = checkoutPullRequestHead({
+              prData,
+              prNumber: context.entityNumber,
+              githubToken,
+            });
+            console.log(`Checked out security-review head: ${checkedOutHead}`);
+          } catch (error) {
+            console.error(`Failed to checkout PR head: ${error}`);
+            throw new Error(
+              `Failed to checkout PR #${context.entityNumber} head for security review`,
+            );
+          }
+
+          """,
+          )
+
+          replace_once(
+              "src/tag/commands/fill.ts",
+              'import { fetchPRBranchData } from "../../github/data/pr-fetcher";\n',
+              'import { fetchPRBranchData } from "../../github/data/pr-fetcher";\nimport { assertExpectedHead } from "../../github/validation/expected-head";\n',
+          )
+          replace_once(
+              "src/tag/commands/fill.ts",
+              "  const branchInfo = {\n",
+              "  assertExpectedHead(prData);\n\n  const branchInfo = {\n",
+          )
+
+          replace_once(
+              "src/entrypoints/generate-review-prompt.ts",
+              'import { execSync } from "child_process";\n',
+              'import { checkoutPullRequestHead } from "../github/validation/expected-head";\n',
+          )
+          replace_section(
+              "src/entrypoints/generate-review-prompt.ts",
+              "    // Checkout the PR branch before computing diff to ensure HEAD points\n",
+              "    const reviewArtifacts",
+              """    // Pin review inputs to the authorized PR head when supplied.
+          console.log(
+            `Checking out PR #${context.entityNumber} head for diff computation...`,
+          );
+          try {
+            const checkedOutHead = checkoutPullRequestHead({
+              prData,
+              prNumber: context.entityNumber,
+              githubToken,
+            });
+            console.log(`Checked out review head: ${checkedOutHead}`);
+          } catch (error) {
+            console.error(`Failed to checkout PR head: ${error}`);
+            throw new Error(
+              `Failed to checkout PR #${context.entityNumber} head for review`,
+            );
+          }
+
+          """,
+          )
+          PY
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format, type-check, and test
+        run: |
+          set -euo pipefail
+          bunx prettier --write \
+            action.yml prepare/action.yml review/action.yml security/action.yml \
+            src/github/validation/expected-head.ts \
+            src/tag/commands/review.ts src/tag/commands/security-review.ts \
+            src/tag/commands/fill.ts src/entrypoints/generate-review-prompt.ts \
+            test/github/validation/expected-head.test.ts docs/expected-head.md
+          bunx prettier --check \
+            action.yml prepare/action.yml review/action.yml security/action.yml \
+            src/github/validation/expected-head.ts \
+            src/tag/commands/review.ts src/tag/commands/security-review.ts \
+            src/tag/commands/fill.ts src/entrypoints/generate-review-prompt.ts \
+            test/github/validation/expected-head.test.ts docs/expected-head.md
+          bun run typecheck
+          bun test test/github/validation/expected-head.test.ts
+          bun test
+
+      - name: Commit verified candidate and remove temporary workflows
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/expected-head-contract-temporary.yml
+          rm .github/workflows/expected-head-contract-v2-temporary.yml
+          rm .github/workflows/expected-head-contract-v3-temporary.yml
+          git config user.name "EffortlessSteven"
+          git config user.email "git@effortlesssteven.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(review): bind invocations to an expected PR head"
+          git push origin "HEAD:${HEAD_REF}"
