@@ -1,13 +1,6 @@
 #!/usr/bin/env bun
 
-import {
-  describe,
-  test,
-  expect,
-  beforeEach,
-  afterEach,
-  spyOn,
-} from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { setupDroidSettings } from "../src/setup-droid-settings";
 import { tmpdir } from "os";
 import { mkdir, writeFile, readFile, rm, stat } from "fs/promises";
@@ -158,9 +151,14 @@ describe("setupDroidSettings", () => {
     );
 
     const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
-    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const errorSpy = spyOn(console, "error").mockImplementation(
+      () => undefined,
+    );
     try {
-      await setupDroidSettings(JSON.stringify({ model: "test-model" }), testHomeDir);
+      await setupDroidSettings(
+        JSON.stringify({ model: "test-model" }),
+        testHomeDir,
+      );
       const output = [
         ...logSpy.mock.calls.flat().map(String),
         ...errorSpy.mock.calls.flat().map(String),
@@ -173,7 +171,10 @@ describe("setupDroidSettings", () => {
   });
 
   test("should persist settings with owner-only file permissions", async () => {
-    await setupDroidSettings(JSON.stringify({ model: "test-model" }), testHomeDir);
+    await setupDroidSettings(
+      JSON.stringify({ model: "test-model" }),
+      testHomeDir,
+    );
     const metadata = await stat(settingsPath);
     expect(metadata.mode & 0o777).toBe(0o600);
   });

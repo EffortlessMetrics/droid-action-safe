@@ -40,7 +40,9 @@ export async function setupDroidSettings(
     } catch {
       // Do not print the value here. A malformed JSON string can itself contain
       // credential material, while a file path is not needed for diagnosis.
-      console.log(`Settings input is not inline JSON; reading it as a file path`);
+      console.log(
+        `Settings input is not inline JSON; reading it as a file path`,
+      );
       try {
         const fileContent = await readFile(settingsInput, "utf-8");
         inputSettings = JSON.parse(fileContent);
