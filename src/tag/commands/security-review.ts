@@ -4,13 +4,15 @@ import type { GitHubContext } from "../../github/context";
 import { fetchPRBranchData } from "../../github/data/pr-fetcher";
 import { computeReviewArtifacts } from "../../github/data/review-artifacts";
 import { createPrompt } from "../../create-prompt";
-import { prepareMcpTools } from "../../mcp/install-mcp-server";
 import { createInitialComment } from "../../github/operations/comments/create-initial";
-import { normalizeDroidArgs, parseAllowedTools } from "../../utils/parse-tools";
 import { isEntityContext } from "../../github/context";
 import { generateSecurityCandidatesPrompt } from "../../create-prompt/templates/security-review-prompt";
 import type { Octokits } from "../../github/api/client";
 import type { PrepareResult } from "../../prepare/types";
+import {
+  buildRestrictedReviewArgs,
+  enableRestrictedReviewMode,
+} from "./review-safety";
 
 type SecurityReviewCommandOptions = {
   context: GitHubContext;
@@ -50,7 +52,6 @@ export async function prepareSecurityReviewMode({
     currentBranch: prData.headRefName,
   };
 
-  // Pin review inputs to the authorized PR head when supplied.
   console.log(
     `Checking out PR #${context.entityNumber} head for diff computation...`,
   );
@@ -68,7 +69,6 @@ export async function prepareSecurityReviewMode({
     );
   }
 
-  // Pre-compute review artifacts (diff, existing comments, and PR description)
   const tempDir = process.env.RUNNER_TEMP || "/tmp";
   const reviewArtifacts = await computeReviewArtifacts({
     baseRef: prData.baseRefName,
@@ -95,76 +95,25 @@ export async function prepareSecurityReviewMode({
     reviewArtifacts,
   });
   core.exportVariable("DROID_EXEC_RUN_TYPE", "droid-security-review");
-
+  enableRestrictedReviewMode();
   core.setOutput("install_security_skills", "true");
 
-  const rawUserArgs = process.env.DROID_ARGS || "";
-  const normalizedUserArgs = normalizeDroidArgs(rawUserArgs);
-  const userAllowedMCPTools = parseAllowedTools(normalizedUserArgs).filter(
-    (tool) => tool.startsWith("github_") && tool.includes("___"),
-  );
-
-  const baseTools = [
-    "Read",
-    "Grep",
-    "Glob",
-    "LS",
-    "Execute",
-    "Edit",
-    "Create",
-    "ApplyPatch",
-    "github_comment___update_droid_comment",
-  ];
-
-  const candidateGenerationTools = ["Task", "FetchUrl", "Skill"];
-
-  const safeUserAllowedMCPTools = userAllowedMCPTools.filter(
-    (tool) =>
-      tool === "github_comment___update_droid_comment" ||
-      (!tool.startsWith("github_pr___") &&
-        tool !== "github_inline_comment___create_inline_comment"),
-  );
-
-  const allowedTools = Array.from(
-    new Set([
-      ...baseTools,
-      ...candidateGenerationTools,
-      ...safeUserAllowedMCPTools,
-    ]),
-  );
-
-  const mcpTools = await prepareMcpTools({
-    githubToken,
-    owner: context.repository.owner,
-    repo: context.repository.repo,
-    droidCommentId: commentId.toString(),
-    allowedTools,
-    mode: "tag",
-    context,
+  const droidArgs = buildRestrictedReviewArgs({
+    reviewModel:
+      process.env.SECURITY_MODEL?.trim() || process.env.REVIEW_MODEL?.trim(),
+    reasoningEffort: process.env.REASONING_EFFORT,
+    reviewDepth: process.env.REVIEW_DEPTH,
   });
 
-  const droidArgParts: string[] = [];
-  droidArgParts.push(`--enabled-tools "${allowedTools.join(",")}"`);
-  droidArgParts.push('--tag "code-review"');
-
-  const securityModel =
-    process.env.SECURITY_MODEL?.trim() || process.env.REVIEW_MODEL?.trim();
-  if (securityModel) {
-    droidArgParts.push(`--model "${securityModel}"`);
-  }
-
-  if (normalizedUserArgs) {
-    droidArgParts.push(normalizedUserArgs);
-  }
-
-  core.setOutput("droid_args", droidArgParts.join(" ").trim());
-  core.setOutput("mcp_tools", mcpTools);
+  core.setOutput("droid_args", droidArgs);
+  core.setOutput("mcp_tools", "");
   core.setOutput("review_pr_number", context.entityNumber.toString());
+  core.setOutput("review_head_sha", prData.headRefOid);
   core.setOutput("droid_comment_id", commentId.toString());
 
   return {
     commentId,
     branchInfo,
-    mcpTools,
+    mcpTools: "",
   };
 }
