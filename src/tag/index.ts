@@ -4,6 +4,7 @@ import { checkHumanActor } from "../github/validation/actor";
 import { createInitialComment } from "../github/operations/comments/create-initial";
 import { isEntityContext, type ParsedGitHubContext } from "../github/context";
 import { extractCommandFromContext } from "../github/utils/command-parser";
+import { readExpectedHeadSha } from "../github/validation/expected-head";
 import { prepareFillMode } from "./commands/fill";
 import { prepareReviewMode } from "./commands/review";
 import { prepareSecurityReviewMode } from "./commands/security-review";
@@ -14,6 +15,15 @@ import type { Octokits } from "../github/api/client";
 
 const DROID_APP_BOT_ID = 209825114;
 const SECURITY_REVIEW_MARKER = "## Security Review Summary";
+export const SECURITY_REVIEW_HEAD_MARKER_PREFIX = "<!-- droid-security-head:";
+
+export function securityReviewMarker(
+  expectedHeadSha = readExpectedHeadSha(),
+): string {
+  return expectedHeadSha
+    ? `${SECURITY_REVIEW_HEAD_MARKER_PREFIX}${expectedHeadSha} -->`
+    : SECURITY_REVIEW_MARKER;
+}
 
 export function shouldTriggerTag(context: GitHubContext): boolean {
   if (!isEntityContext(context)) {
@@ -29,14 +39,16 @@ export function shouldTriggerTag(context: GitHubContext): boolean {
 }
 
 /**
- * Checks if a security review has already been performed on this PR.
- * Used to implement "run once" behavior for automatic security reviews.
+ * Checks whether automatic security review has already completed for the
+ * invocation's expected PR head. When no expected head is supplied, preserve
+ * the historical run-once-per-PR behavior for compatibility.
  */
 async function hasExistingSecurityReview(
   octokit: Octokits,
   context: ParsedGitHubContext,
 ): Promise<boolean> {
   const { owner, repo } = context.repository;
+  const marker = securityReviewMarker();
 
   try {
     const comments = await octokit.rest.issues.listComments({
@@ -46,15 +58,13 @@ async function hasExistingSecurityReview(
       per_page: 100,
     });
 
-    const hasSecurityReview = comments.data.some((comment) => {
+    return comments.data.some((comment) => {
       const isOurBot =
         comment.user?.id === DROID_APP_BOT_ID ||
         (comment.user?.type === "Bot" &&
           comment.user?.login.toLowerCase().includes("droid"));
-      return isOurBot && comment.body?.includes(SECURITY_REVIEW_MARKER);
+      return isOurBot && comment.body?.includes(marker);
     });
-
-    return hasSecurityReview;
   } catch (error) {
     console.warn("Failed to check for existing security review:", error);
     return false;
@@ -119,11 +129,12 @@ export async function prepareTagExecution({
   ) {
     let runSecurityReview = true;
 
-    // Check if security review already exists on this PR (run once behavior)
+    // With expected_head_sha, completion is scoped to that exact head. Without
+    // it, retain the historical run-once-per-PR behavior.
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
       console.log(
-        "Security review already exists on this PR, skipping security",
+        "Security review already exists for this review scope, skipping security",
       );
       runSecurityReview = false;
     }
@@ -158,10 +169,11 @@ export async function prepareTagExecution({
   }
 
   if (context.inputs.automaticSecurityReview) {
-    // Check if security review already exists on this PR (run once behavior)
+    // With expected_head_sha, completion is scoped to that exact head. Without
+    // it, retain the historical run-once-per-PR behavior.
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
-      console.log("Security review already exists on this PR, skipping");
+      console.log("Security review already exists for this review scope, skipping");
       core.setOutput("run_code_review", "false");
       core.setOutput("run_security_review", "false");
       return {
