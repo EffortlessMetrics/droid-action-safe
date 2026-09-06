@@ -173,7 +173,9 @@ export async function prepareTagExecution({
   if (context.inputs.automaticSecurityReview) {
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
-      console.log("Security review already exists for this review scope, skipping");
+      console.log(
+        "Security review already exists for this review scope, skipping",
+      );
       core.setOutput("run_code_review", "false");
       setSecurityReviewDecision(false);
       return {
