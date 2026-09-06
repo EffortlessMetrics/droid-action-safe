@@ -18,6 +18,14 @@ async function run() {
   try {
     collectActionInputsPresence();
 
+    // Preserve the caller's immutable review identity for all later composite
+    // steps. This is written through GITHUB_ENV by @actions/core rather than
+    // re-reading mutable pull-request metadata after the model run.
+    core.exportVariable(
+      "EXPECTED_HEAD_SHA",
+      process.env.EXPECTED_HEAD_SHA?.trim().toLowerCase() ?? "",
+    );
+
     // Parse GitHub context first to enable mode detection
     const context = parseGitHubContext();
 
@@ -27,7 +35,6 @@ async function run() {
 
     // Step 3: Check write permissions (only for entity contexts)
     if (isEntityContext(context)) {
-      // Check if github_token was provided as input (not from app)
       const githubTokenProvided = !!process.env.OVERRIDE_GITHUB_TOKEN;
       const hasWritePermissions = await checkWritePermissions(
         octokit.rest,
@@ -46,37 +53,28 @@ async function run() {
     const containsTrigger = shouldTriggerTag(context);
 
     console.log(`Trigger result: ${containsTrigger}`);
-
-    // Set output for action.yml to check
     core.setOutput("contains_trigger", containsTrigger.toString());
 
     if (!containsTrigger) {
       console.log("No trigger found, skipping remaining steps");
-      // Still set github_token output even when skipping
       core.setOutput("github_token", githubToken);
       return;
     }
 
-    // Step 5: Use the new modular prepare function
     const result = await prepare({
       context,
       octokit,
       githubToken,
     });
 
-    // MCP config is handled by individual modes (tag/agent) and included in their droid_args output
-
-    // Expose the GitHub token (Droid App token) as an output
     core.setOutput("github_token", githubToken);
 
-    // Pass MCP tool config downstream for registration
     if (result?.mcpTools) {
       core.setOutput("mcp_tools", result.mcpTools);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     core.setFailed(`Prepare step failed with error: ${errorMessage}`);
-    // Also output the clean error message for the action to capture
     core.setOutput("prepare_error", errorMessage);
     process.exit(1);
   }
