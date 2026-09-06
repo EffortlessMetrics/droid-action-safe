@@ -37,8 +37,17 @@ jobs:
               raise SystemExit('expected exactly one github_token/droid_args input anchor')
           text = text.replace(input_anchor, input_replacement, 1)
 
-          env_anchor = '''        OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}\n        ALLOWED_BOTS: ${{ inputs.allowed_bots }}\n'''
-          env_replacement = '''        OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}\n        EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}\n        ALLOWED_BOTS: ${{ inputs.allowed_bots }}\n'''
+          expr_open = '$' + '{{'
+          expr_close = '}}'
+          env_anchor = (
+              '        OVERRIDE_GITHUB_TOKEN: ' + expr_open + ' inputs.github_token ' + expr_close + '\n'
+              '        ALLOWED_BOTS: ' + expr_open + ' inputs.allowed_bots ' + expr_close + '\n'
+          )
+          env_replacement = (
+              '        OVERRIDE_GITHUB_TOKEN: ' + expr_open + ' inputs.github_token ' + expr_close + '\n'
+              '        EXPECTED_HEAD_SHA: ' + expr_open + ' inputs.expected_head_sha ' + expr_close + '\n'
+              '        ALLOWED_BOTS: ' + expr_open + ' inputs.allowed_bots ' + expr_close + '\n'
+          )
           if text.count(env_anchor) != 1:
               raise SystemExit('expected exactly one prepare token env anchor')
           text = text.replace(env_anchor, env_replacement, 1)
@@ -58,7 +67,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq 'expected_head_sha:' action.yml
-          grep -Fq 'EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}' action.yml
+          expected_env='EXPECTED_HEAD_SHA: $'"{{ inputs.expected_head_sha }}"
+          grep -Fq "$expected_env" action.yml
           grep -Fq 'upload_debug_artifacts:' action.yml
           grep -Fq "inputs.upload_debug_artifacts == 'true'" action.yml
           grep -Fq 'droid-debug-sanitized' action.yml
