@@ -1,10 +1,17 @@
 #!/usr/bin/env bun
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  spyOn,
+} from "bun:test";
 import { setupDroidSettings } from "../src/setup-droid-settings";
 import { tmpdir } from "os";
-import { mkdir, writeFile, readFile, rm } from "fs/promises";
-import { join } from "path";
+import { mkdir, writeFile, readFile, rm, stat } from "fs/promises";
+import { dirname, join } from "path";
 
 const testHomeDir = join(
   tmpdir(),
@@ -17,13 +24,11 @@ const testSettingsPath = join(testSettingsDir, "test-settings.json");
 
 describe("setupDroidSettings", () => {
   beforeEach(async () => {
-    // Create test home directory and test settings directory
     await mkdir(testHomeDir, { recursive: true });
     await mkdir(testSettingsDir, { recursive: true });
   });
 
   afterEach(async () => {
-    // Clean up test home directory
     await rm(testHomeDir, { recursive: true, force: true });
   });
 
@@ -123,13 +128,11 @@ describe("setupDroidSettings", () => {
   });
 
   test("should merge with existing settings", async () => {
-    // First, create some existing settings
     await setupDroidSettings(
       JSON.stringify({ existingKey: "existingValue" }),
       testHomeDir,
     );
 
-    // Then, add new settings
     const newSettings = JSON.stringify({
       newKey: "newValue",
       model: "gpt-5-codex",
@@ -144,5 +147,34 @@ describe("setupDroidSettings", () => {
     expect(settings.existingKey).toBe("existingValue");
     expect(settings.newKey).toBe("newValue");
     expect(settings.model).toBe("gpt-5-codex");
+  });
+
+  test("should never print existing credential values while merging settings", async () => {
+    const secret = "super-secret-byok-value";
+    await mkdir(dirname(settingsPath), { recursive: true });
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ customModels: [{ apiKey: secret }] }),
+    );
+
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await setupDroidSettings(JSON.stringify({ model: "test-model" }), testHomeDir);
+      const output = [
+        ...logSpy.mock.calls.flat().map(String),
+        ...errorSpy.mock.calls.flat().map(String),
+      ].join("\n");
+      expect(output).not.toContain(secret);
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("should persist settings with owner-only file permissions", async () => {
+    await setupDroidSettings(JSON.stringify({ model: "test-model" }), testHomeDir);
+    const metadata = await stat(settingsPath);
+    expect(metadata.mode & 0o777).toBe(0o600);
   });
 });
