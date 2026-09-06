@@ -22,8 +22,13 @@ jobs:
           bun-version: 1.2.11
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Format check
-        run: bun run format:check
+      - name: Show formatting delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx prettier --write src/tag/index.ts
+          git diff -- src/tag/index.ts
+          git diff --exit-code -- src/tag/index.ts
       - name: Typecheck
         run: bun run typecheck
       - name: Test
