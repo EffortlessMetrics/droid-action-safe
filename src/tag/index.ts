@@ -25,6 +25,14 @@ export function securityReviewMarker(
     : SECURITY_REVIEW_MARKER;
 }
 
+function setSecurityReviewDecision(runSecurityReview: boolean): void {
+  const value = runSecurityReview.toString();
+  core.setOutput("run_security_review", value);
+  // Persist the decision to later composite steps. Completion evidence should
+  // describe what actually ran, not merely what the caller requested.
+  core.exportVariable("RUN_SECURITY_REVIEW", value);
+}
+
 export function shouldTriggerTag(context: GitHubContext): boolean {
   if (!isEntityContext(context)) {
     return false;
@@ -100,7 +108,6 @@ export async function prepareTagExecution({
 
   const commandContext = extractCommandFromContext(context);
 
-  // Determine comment type based on what's being run
   const isDualReview =
     context.inputs.automaticReview && context.inputs.automaticSecurityReview;
   const isSecurityOnly =
@@ -122,15 +129,12 @@ export async function prepareTagExecution({
   );
   const commentId = commentData.id;
 
-  // Handle when both automatic review flags are set
   if (
     context.inputs.automaticReview &&
     context.inputs.automaticSecurityReview
   ) {
     let runSecurityReview = true;
 
-    // With expected_head_sha, completion is scoped to that exact head. Without
-    // it, retain the historical run-once-per-PR behavior.
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
       console.log(
@@ -140,15 +144,13 @@ export async function prepareTagExecution({
     }
 
     if (runSecurityReview) {
-      // Signal to the code review prompt to spawn a security-reviewer subagent
       core.exportVariable("SECURITY_REVIEW_ENABLED", "true");
       core.setOutput("install_security_skills", "true");
     }
 
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", runSecurityReview.toString());
+    setSecurityReviewDecision(runSecurityReview);
 
-    // Prepare the code review (security review runs as a subagent within pass 1)
     return prepareReviewMode({
       context,
       octokit,
@@ -159,7 +161,7 @@ export async function prepareTagExecution({
 
   if (context.inputs.automaticReview) {
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "false");
+    setSecurityReviewDecision(false);
     return prepareReviewMode({
       context,
       octokit,
@@ -169,13 +171,11 @@ export async function prepareTagExecution({
   }
 
   if (context.inputs.automaticSecurityReview) {
-    // With expected_head_sha, completion is scoped to that exact head. Without
-    // it, retain the historical run-once-per-PR behavior.
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
       console.log("Security review already exists for this review scope, skipping");
       core.setOutput("run_code_review", "false");
-      core.setOutput("run_security_review", "false");
+      setSecurityReviewDecision(false);
       return {
         skipped: true,
         reason: "security_review_exists",
@@ -187,9 +187,8 @@ export async function prepareTagExecution({
       };
     }
 
-    // Standalone security review uses the two-pass pipeline (candidates + validator)
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "true");
+    setSecurityReviewDecision(true);
     return prepareSecurityReviewMode({
       context,
       octokit,
@@ -199,6 +198,7 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "fill") {
+    setSecurityReviewDecision(false);
     return prepareFillMode({
       context,
       octokit,
@@ -208,9 +208,8 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "security") {
-    // Standalone security review uses the two-pass pipeline (candidates + validator)
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "true");
+    setSecurityReviewDecision(true);
     return prepareSecurityReviewMode({
       context,
       octokit,
@@ -220,6 +219,9 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "security-full") {
+    // Full-repository scan reporting has a separate artifact/report contract;
+    // it must not mint a PR-head automatic-review completion marker.
+    setSecurityReviewDecision(false);
     return prepareSecurityScanMode({
       context,
       octokit,
@@ -228,14 +230,13 @@ export async function prepareTagExecution({
     });
   }
 
-  // @droid review or @droid (default) = code review only
   if (
     commandContext?.command === "review" ||
     !commandContext ||
     commandContext.command === "default"
   ) {
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "false");
+    setSecurityReviewDecision(false);
     return prepareReviewMode({
       context,
       octokit,
@@ -244,5 +245,6 @@ export async function prepareTagExecution({
     });
   }
 
+  setSecurityReviewDecision(false);
   throw new Error(`Unexpected command: ${commandContext?.command}`);
 }
