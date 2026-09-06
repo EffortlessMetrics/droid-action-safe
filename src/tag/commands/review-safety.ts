@@ -8,7 +8,6 @@ export const RESTRICTED_REVIEW_TOOLS = [
   "Glob",
   "LS",
   "Create",
-  "Skill",
 ] as const;
 
 /**
@@ -28,7 +27,7 @@ export function buildRestrictedReviewArgs(options: {
   });
 
   const parts = [
-    '--auto low',
+    "--auto low",
     `--restrict-tools "${RESTRICTED_REVIEW_TOOLS.join(",")}"`,
     '--tag "code-review"',
   ];
