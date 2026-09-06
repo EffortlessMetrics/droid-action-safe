@@ -4,14 +4,15 @@ import type { GitHubContext } from "../../github/context";
 import { fetchPRBranchData } from "../../github/data/pr-fetcher";
 import { computeReviewArtifacts } from "../../github/data/review-artifacts";
 import { createPrompt } from "../../create-prompt";
-import { prepareMcpTools } from "../../mcp/install-mcp-server";
 import { createInitialComment } from "../../github/operations/comments/create-initial";
-import { normalizeDroidArgs, parseAllowedTools } from "../../utils/parse-tools";
 import { isEntityContext } from "../../github/context";
 import { generateReviewCandidatesPrompt } from "../../create-prompt/templates/review-candidates-prompt";
 import type { Octokits } from "../../github/api/client";
 import type { PrepareResult } from "../../prepare/types";
-import { resolveReviewConfig } from "../../utils/review-depth";
+import {
+  buildRestrictedReviewArgs,
+  enableRestrictedReviewMode,
+} from "./review-safety";
 
 type ReviewCommandOptions = {
   context: GitHubContext;
@@ -49,7 +50,6 @@ export async function prepareReviewMode({
     currentBranch: prData.headRefName,
   };
 
-  // Pin review inputs to the authorized PR head when supplied.
   console.log(
     `Checking out PR #${context.entityNumber} head for diff computation...`,
   );
@@ -67,7 +67,6 @@ export async function prepareReviewMode({
     );
   }
 
-  // Pre-compute review artifacts (diff, existing comments, and PR description)
   const tempDir = process.env.RUNNER_TEMP || "/tmp";
   const reviewArtifacts = await computeReviewArtifacts({
     baseRef: prData.baseRefName,
@@ -97,84 +96,23 @@ export async function prepareReviewMode({
     includeSuggestions,
   });
   core.exportVariable("DROID_EXEC_RUN_TYPE", "droid-review");
+  enableRestrictedReviewMode();
 
-  const rawUserArgs = process.env.DROID_ARGS || "";
-  const normalizedUserArgs = normalizeDroidArgs(rawUserArgs);
-  const userAllowedMCPTools = parseAllowedTools(normalizedUserArgs).filter(
-    (tool) => tool.startsWith("github_") && tool.includes("___"),
-  );
-
-  const baseTools = [
-    "Read",
-    "Grep",
-    "Glob",
-    "LS",
-    "Execute",
-    "Edit",
-    "Create",
-    "ApplyPatch",
-    "github_comment___update_droid_comment",
-  ];
-
-  // Task tool is needed for parallel subagent reviews in candidate generation phase.
-  // FetchUrl is needed to fetch linked tickets from the PR description.
-  // Skill is needed so review subagents can invoke the review-guidelines skill.
-  const candidateGenerationTools = ["Task", "FetchUrl", "Skill"];
-
-  const safeUserAllowedMCPTools = userAllowedMCPTools.filter(
-    (tool) =>
-      tool === "github_comment___update_droid_comment" ||
-      (!tool.startsWith("github_pr___") &&
-        tool !== "github_inline_comment___create_inline_comment"),
-  );
-
-  const allowedTools = Array.from(
-    new Set([
-      ...baseTools,
-      ...candidateGenerationTools,
-      ...safeUserAllowedMCPTools,
-    ]),
-  );
-
-  const mcpTools = await prepareMcpTools({
-    githubToken,
-    owner: context.repository.owner,
-    repo: context.repository.repo,
-    droidCommentId: commentId.toString(),
-    allowedTools,
-    mode: "tag",
-    context,
+  const droidArgs = buildRestrictedReviewArgs({
+    reviewModel: process.env.REVIEW_MODEL,
+    reasoningEffort: process.env.REASONING_EFFORT,
+    reviewDepth: process.env.REVIEW_DEPTH,
   });
 
-  const droidArgParts: string[] = [];
-  droidArgParts.push(`--enabled-tools "${allowedTools.join(",")}"`);
-  droidArgParts.push('--tag "code-review"');
-
-  const { model, reasoningEffort } = resolveReviewConfig({
-    reviewModel: process.env.REVIEW_MODEL?.trim(),
-    reasoningEffort: process.env.REASONING_EFFORT?.trim(),
-    reviewDepth: process.env.REVIEW_DEPTH?.trim(),
-  });
-
-  if (model) {
-    droidArgParts.push(`--model "${model}"`);
-  }
-  if (reasoningEffort) {
-    droidArgParts.push(`--reasoning-effort "${reasoningEffort}"`);
-  }
-
-  if (normalizedUserArgs) {
-    droidArgParts.push(normalizedUserArgs);
-  }
-
-  core.setOutput("droid_args", droidArgParts.join(" ").trim());
-  core.setOutput("mcp_tools", mcpTools);
+  core.setOutput("droid_args", droidArgs);
+  core.setOutput("mcp_tools", "");
   core.setOutput("review_pr_number", context.entityNumber.toString());
+  core.setOutput("review_head_sha", prData.headRefOid);
   core.setOutput("droid_comment_id", commentId.toString());
 
   return {
     commentId,
     branchInfo,
-    mcpTools,
+    mcpTools: "",
   };
 }
