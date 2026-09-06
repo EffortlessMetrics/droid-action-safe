@@ -24,15 +24,12 @@ async function run() {
 
     const context = parseGitHubContext();
 
-    // This script is only called for entity-based events
     if (!isEntityContext(context)) {
       throw new Error("update-comment-link requires an entity context");
     }
 
     const { owner, repo } = context.repository;
-
     const octokit = createOctokit(githubToken);
-
     const serverUrl = GITHUB_SERVER_URL;
     const jobUrl = `${serverUrl}/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
@@ -50,15 +47,12 @@ async function run() {
       comment = result.comment;
       isPRReviewComment = result.isPRReviewComment;
     } catch (finalError) {
-      // Check if this is a 404 error (comment was deleted)
       const is404 =
         finalError instanceof Error &&
         "status" in finalError &&
         (finalError as { status: number }).status === 404;
 
       if (is404) {
-        // Comment was deleted (possibly by user, spam filter, or another automation)
-        // This is not a critical failure - the main review/action likely completed
         console.log(
           `⚠️ Comment ${commentId} no longer exists (404). Skipping update.`,
         );
@@ -68,14 +62,12 @@ async function run() {
         process.exit(0);
       }
 
-      // For non-404 errors, log debug info and fail
       console.error("Failed to fetch comment. Debug info:");
       console.error(`Comment ID: ${commentId}`);
       console.error(`Event name: ${context.eventName}`);
       console.error(`Entity number: ${context.entityNumber}`);
       console.error(`Repository: ${context.repository.full_name}`);
 
-      // Try to get the PR info to understand the comment structure
       try {
         const { data: pr } = await octokit.rest.pulls.get({
           owner,
@@ -93,11 +85,9 @@ async function run() {
     }
 
     const currentBody = comment.body ?? "";
-
     const branchLink = "";
     const prLink = "";
 
-    // Check if action failed and read output file for execution details
     let executionDetails: {
       cost_usd?: number;
       duration_ms?: number;
@@ -106,7 +96,6 @@ async function run() {
     let actionFailed = false;
     let errorDetails: string | undefined;
 
-    // First check if prepare step failed
     const prepareSuccess = process.env.PREPARE_SUCCESS !== "false";
     const prepareError = process.env.PREPARE_ERROR;
 
@@ -114,14 +103,12 @@ async function run() {
       actionFailed = true;
       errorDetails = prepareError;
     } else {
-      // Check for existence of output file and parse it if available
       try {
         const outputFile = process.env.OUTPUT_FILE;
         if (outputFile) {
           const fileContent = await fs.readFile(outputFile, "utf8");
           const outputData = JSON.parse(fileContent);
 
-          // Output file is an array, get the last element which contains execution details
           if (Array.isArray(outputData) && outputData.length > 0) {
             const lastElement = outputData[outputData.length - 1];
             if (
@@ -138,17 +125,20 @@ async function run() {
           }
         }
 
-        // Check if the Droid action failed
         const droidSuccess = process.env.DROID_SUCCESS !== "false";
         actionFailed = !droidSuccess;
       } catch (error) {
         console.error("Error reading output file:", error);
-        // If we can't read the file, check for any failure markers
         actionFailed = process.env.DROID_SUCCESS === "false";
       }
     }
 
-    // Prepare input for updateCommentBody function
+    // A security completion marker is evidence, so write it only after the
+    // requested security path completed successfully. Do not infer completion
+    // merely because automatic_security_review was configured on the caller.
+    const securityReviewRan =
+      !actionFailed && process.env.RUN_SECURITY_REVIEW === "true";
+
     const commentInput: CommentUpdateInput = {
       currentBody,
       actionFailed,
@@ -159,7 +149,10 @@ async function run() {
       branchName: undefined,
       triggerUsername,
       errorDetails,
-      securityReviewRan: process.env.AUTOMATIC_SECURITY_REVIEW === "true",
+      securityReviewRan,
+      securityReviewHeadSha: securityReviewRan
+        ? process.env.EXPECTED_HEAD_SHA
+        : undefined,
     };
 
     const updatedBody = updateCommentBody(commentInput);

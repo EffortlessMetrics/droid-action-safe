@@ -4,6 +4,7 @@ import { checkHumanActor } from "../github/validation/actor";
 import { createInitialComment } from "../github/operations/comments/create-initial";
 import { isEntityContext, type ParsedGitHubContext } from "../github/context";
 import { extractCommandFromContext } from "../github/utils/command-parser";
+import { readExpectedHeadSha } from "../github/validation/expected-head";
 import { prepareFillMode } from "./commands/fill";
 import { prepareReviewMode } from "./commands/review";
 import { prepareSecurityReviewMode } from "./commands/security-review";
@@ -14,6 +15,23 @@ import type { Octokits } from "../github/api/client";
 
 const DROID_APP_BOT_ID = 209825114;
 const SECURITY_REVIEW_MARKER = "## Security Review Summary";
+export const SECURITY_REVIEW_HEAD_MARKER_PREFIX = "<!-- droid-security-head:";
+
+export function securityReviewMarker(
+  expectedHeadSha = readExpectedHeadSha(),
+): string {
+  return expectedHeadSha
+    ? `${SECURITY_REVIEW_HEAD_MARKER_PREFIX}${expectedHeadSha} -->`
+    : SECURITY_REVIEW_MARKER;
+}
+
+function setSecurityReviewDecision(runSecurityReview: boolean): void {
+  const value = runSecurityReview.toString();
+  core.setOutput("run_security_review", value);
+  // Persist the decision to later composite steps. Completion evidence should
+  // describe what actually ran, not merely what the caller requested.
+  core.exportVariable("RUN_SECURITY_REVIEW", value);
+}
 
 export function shouldTriggerTag(context: GitHubContext): boolean {
   if (!isEntityContext(context)) {
@@ -29,14 +47,16 @@ export function shouldTriggerTag(context: GitHubContext): boolean {
 }
 
 /**
- * Checks if a security review has already been performed on this PR.
- * Used to implement "run once" behavior for automatic security reviews.
+ * Checks whether automatic security review has already completed for the
+ * invocation's expected PR head. When no expected head is supplied, preserve
+ * the historical run-once-per-PR behavior for compatibility.
  */
 async function hasExistingSecurityReview(
   octokit: Octokits,
   context: ParsedGitHubContext,
 ): Promise<boolean> {
   const { owner, repo } = context.repository;
+  const marker = securityReviewMarker();
 
   try {
     const comments = await octokit.rest.issues.listComments({
@@ -46,15 +66,13 @@ async function hasExistingSecurityReview(
       per_page: 100,
     });
 
-    const hasSecurityReview = comments.data.some((comment) => {
+    return comments.data.some((comment) => {
       const isOurBot =
         comment.user?.id === DROID_APP_BOT_ID ||
         (comment.user?.type === "Bot" &&
           comment.user?.login.toLowerCase().includes("droid"));
-      return isOurBot && comment.body?.includes(SECURITY_REVIEW_MARKER);
+      return isOurBot && comment.body?.includes(marker);
     });
-
-    return hasSecurityReview;
   } catch (error) {
     console.warn("Failed to check for existing security review:", error);
     return false;
@@ -90,7 +108,6 @@ export async function prepareTagExecution({
 
   const commandContext = extractCommandFromContext(context);
 
-  // Determine comment type based on what's being run
   const isDualReview =
     context.inputs.automaticReview && context.inputs.automaticSecurityReview;
   const isSecurityOnly =
@@ -112,32 +129,28 @@ export async function prepareTagExecution({
   );
   const commentId = commentData.id;
 
-  // Handle when both automatic review flags are set
   if (
     context.inputs.automaticReview &&
     context.inputs.automaticSecurityReview
   ) {
     let runSecurityReview = true;
 
-    // Check if security review already exists on this PR (run once behavior)
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
       console.log(
-        "Security review already exists on this PR, skipping security",
+        "Security review already exists for this review scope, skipping security",
       );
       runSecurityReview = false;
     }
 
     if (runSecurityReview) {
-      // Signal to the code review prompt to spawn a security-reviewer subagent
       core.exportVariable("SECURITY_REVIEW_ENABLED", "true");
       core.setOutput("install_security_skills", "true");
     }
 
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", runSecurityReview.toString());
+    setSecurityReviewDecision(runSecurityReview);
 
-    // Prepare the code review (security review runs as a subagent within pass 1)
     return prepareReviewMode({
       context,
       octokit,
@@ -148,7 +161,7 @@ export async function prepareTagExecution({
 
   if (context.inputs.automaticReview) {
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "false");
+    setSecurityReviewDecision(false);
     return prepareReviewMode({
       context,
       octokit,
@@ -158,12 +171,13 @@ export async function prepareTagExecution({
   }
 
   if (context.inputs.automaticSecurityReview) {
-    // Check if security review already exists on this PR (run once behavior)
     const hasExisting = await hasExistingSecurityReview(octokit, context);
     if (hasExisting) {
-      console.log("Security review already exists on this PR, skipping");
+      console.log(
+        "Security review already exists for this review scope, skipping",
+      );
       core.setOutput("run_code_review", "false");
-      core.setOutput("run_security_review", "false");
+      setSecurityReviewDecision(false);
       return {
         skipped: true,
         reason: "security_review_exists",
@@ -175,9 +189,8 @@ export async function prepareTagExecution({
       };
     }
 
-    // Standalone security review uses the two-pass pipeline (candidates + validator)
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "true");
+    setSecurityReviewDecision(true);
     return prepareSecurityReviewMode({
       context,
       octokit,
@@ -187,6 +200,7 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "fill") {
+    setSecurityReviewDecision(false);
     return prepareFillMode({
       context,
       octokit,
@@ -196,9 +210,8 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "security") {
-    // Standalone security review uses the two-pass pipeline (candidates + validator)
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "true");
+    setSecurityReviewDecision(true);
     return prepareSecurityReviewMode({
       context,
       octokit,
@@ -208,6 +221,9 @@ export async function prepareTagExecution({
   }
 
   if (commandContext?.command === "security-full") {
+    // Full-repository scan reporting has a separate artifact/report contract;
+    // it must not mint a PR-head automatic-review completion marker.
+    setSecurityReviewDecision(false);
     return prepareSecurityScanMode({
       context,
       octokit,
@@ -216,14 +232,13 @@ export async function prepareTagExecution({
     });
   }
 
-  // @droid review or @droid (default) = code review only
   if (
     commandContext?.command === "review" ||
     !commandContext ||
     commandContext.command === "default"
   ) {
     core.setOutput("run_code_review", "true");
-    core.setOutput("run_security_review", "false");
+    setSecurityReviewDecision(false);
     return prepareReviewMode({
       context,
       octokit,
@@ -232,5 +247,6 @@ export async function prepareTagExecution({
     });
   }
 
+  setSecurityReviewDecision(false);
   throw new Error(`Unexpected command: ${commandContext?.command}`);
 }

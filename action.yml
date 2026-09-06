@@ -139,6 +139,10 @@ inputs:
     description: "Show full JSON output from Droid Exec. WARNING: This outputs ALL Droid messages including tool execution results which may contain secrets, API keys, or other sensitive information. These logs are publicly visible in GitHub Actions. Only enable for debugging in non-sensitive environments."
     required: false
     default: "false"
+  upload_debug_artifacts:
+    description: "Upload sanitized Droid debug artifacts. Raw $HOME/.factory and raw prompt files are never uploaded. Defaults to false for secrets-backed runs."
+    required: false
+    default: "false"
 
 outputs:
   github_token:
@@ -357,24 +361,64 @@ runs:
         USE_STICKY_COMMENT: ${{ inputs.use_sticky_comment }}
         TRACK_PROGRESS: ${{ inputs.track_progress }}
         AUTOMATIC_REVIEW: ${{ inputs.automatic_review }}
-        AUTOMATIC_SECURITY_REVIEW: ${{ inputs.automatic_security_review }}
 
-    - name: Collect .factory debug files
-      if: always() && steps.prepare.outputs.contains_trigger == 'true'
+    - name: Collect sanitized debug artifacts
+      if: always() && steps.prepare.outputs.contains_trigger == 'true' && inputs.upload_debug_artifacts == 'true'
       shell: bash
       run: |
-        if [ -d "$HOME/.factory" ]; then
-          cp -r "$HOME/.factory" "${{ runner.temp }}/.factory"
+        set -euo pipefail
+
+        DEBUG_DIR="${{ runner.temp }}/droid-debug-sanitized"
+        rm -rf "$DEBUG_DIR"
+        mkdir -p "$DEBUG_DIR/factory" "$DEBUG_DIR/droid-prompts"
+
+        sanitize_file() {
+          local src="$1"
+          local dest="$2"
+          mkdir -p "$(dirname "$dest")"
+          python3 - "$src" "$dest" <<'PY'
+        import pathlib
+        import re
+        import sys
+
+        src, dest = sys.argv[1], sys.argv[2]
+        data = pathlib.Path(src).read_text(errors="replace")
+        patterns = [
+            (r'(?i)("?(?:api[_-]?key|token|authorization|auth[_-]?token|secret|password|github[_-]?token|factory[_-]?api[_-]?key)"?\s*[:=]\s*)"[^"\n]*"', r'\1"[REDACTED]"'),
+            (r'(?i)("?(?:api[_-]?key|token|authorization|auth[_-]?token|secret|password|github[_-]?token|factory[_-]?api[_-]?key)"?\s*[:=]\s*)[^\s,\]}]+', r'\1[REDACTED]'),
+            (r'(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[REDACTED]'),
+            (r'(?i)(x-api-key\s*[:=]\s*)[^\s,\]}]+', r'\1[REDACTED]'),
+        ]
+        for pattern, replacement in patterns:
+            data = re.sub(pattern, replacement, data)
+        pathlib.Path(dest).write_text(data)
+        PY
+        }
+
+        for name in settings.json settings.local.json mcp.json; do
+          if [ -f "$HOME/.factory/$name" ]; then
+            sanitize_file "$HOME/.factory/$name" "$DEBUG_DIR/factory/$name"
+          fi
+        done
+
+        if [ -d "${{ runner.temp }}/droid-prompts" ]; then
+          while IFS= read -r -d '' file; do
+            rel="${file#${{ runner.temp }}/droid-prompts/}"
+            sanitize_file "$file" "$DEBUG_DIR/droid-prompts/$rel"
+          done < <(find "${{ runner.temp }}/droid-prompts" -type f -print0)
         fi
 
-    - name: Upload debug artifacts
-      if: always() && steps.prepare.outputs.contains_trigger == 'true'
+        cat > "$DEBUG_DIR/README.txt" <<'EOF'
+        Sanitized Droid debug artifacts. This action never uploads raw $HOME/.factory
+        or raw droid-prompts files.
+        EOF
+
+    - name: Upload sanitized debug artifacts
+      if: always() && steps.prepare.outputs.contains_trigger == 'true' && inputs.upload_debug_artifacts == 'true'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: droid-review-debug-${{ github.run_id }}
-        path: |
-          ${{ runner.temp }}/.factory/**
-          ${{ runner.temp }}/droid-prompts/**
-        include-hidden-files: true
+        name: droid-review-debug-sanitized-${{ github.run_id }}
+        path: ${{ runner.temp }}/droid-debug-sanitized/**
+        include-hidden-files: false
         if-no-files-found: ignore
-        retention-days: 7
+        retention-days: 1
