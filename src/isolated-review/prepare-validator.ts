@@ -3,7 +3,7 @@
 import * as core from "@actions/core";
 import { readFile, writeFile } from "fs/promises";
 import { CandidateDocumentSchema, ReviewStateSchema } from "./schemas";
-import { validateCandidateDocument } from "./io";
+import { parseDiffAnchors, validateCandidateDocument } from "./io";
 import { validatorPrompt } from "./prompts";
 
 function required(name: string): string {
@@ -20,7 +20,8 @@ async function main(): Promise<void> {
   const candidates = CandidateDocumentSchema.parse(
     JSON.parse(await readFile(state.candidatesPath, "utf8")),
   );
-  validateCandidateDocument(state, candidates);
+  const diffAnchors = parseDiffAnchors(await readFile(state.diffPath, "utf8"));
+  validateCandidateDocument(state, candidates, diffAnchors);
 
   await writeFile(state.validatorPromptPath, validatorPrompt(state), {
     encoding: "utf8",
