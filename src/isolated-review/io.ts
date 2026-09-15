@@ -106,9 +106,7 @@ export function parseDiffAnchors(diff: string): Set<string> {
       continue;
     }
 
-    const hunk = line.match(
-      /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/,
-    );
+    const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
       oldLine = Number.parseInt(hunk[1], 10);
       newLine = Number.parseInt(hunk[2], 10);
