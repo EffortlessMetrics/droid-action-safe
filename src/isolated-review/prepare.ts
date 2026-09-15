@@ -38,6 +38,10 @@ async function main(): Promise<void> {
   if (!isEntityContext(context) || !context.isPR) {
     throw new Error("isolated review requires a pull-request event context");
   }
+  const sender = (context.payload as { sender?: { type?: string } }).sender;
+  if (sender?.type !== "User" || context.actor.endsWith("[bot]")) {
+    throw new Error("isolated review accepts explicit human requests only");
+  }
   const command = extractCommandFromContext(context);
   if (!command || !["review", "default"].includes(command.command)) {
     throw new Error(
