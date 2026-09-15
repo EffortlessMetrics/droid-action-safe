@@ -8,8 +8,8 @@ inputs:
   factory_api_key:
     description: Factory credential used only by the Droid CLI process.
     required: true
-  model_api_key:
-    description: BYOK model credential serialized into the private runtime home.
+  minimax_api_key:
+    description: MiniMax credential serialized into the private runtime home for the fixed M3 endpoint.
     required: true
   expected_head_sha:
     description: Exact same-repository pull-request head authorized for review.
@@ -21,34 +21,10 @@ inputs:
     description: Exact Droid CLI version reported by the supplied executable.
     required: false
     default: "0.219.0"
-  model_id:
-    description: Provider model identifier stored in the custom-model configuration.
-    required: false
-    default: "MiniMax-M3"
-  model_display_name:
-    description: Display name stored in the custom-model configuration.
-    required: false
-    default: "MiniMax-M3"
-  model_selector:
-    description: Droid custom-model selector used for both independent passes.
-    required: false
-    default: "custom:MiniMax-M3-0"
-  model_base_url:
-    description: Custom-model provider endpoint.
-    required: false
-    default: "https://api.minimax.io/anthropic"
-  model_provider:
-    description: Custom-model provider protocol.
-    required: false
-    default: "anthropic"
-  max_output_tokens:
-    description: Maximum output tokens configured for the custom model.
-    required: false
-    default: "64000"
 
 outputs:
   approved_comments:
-    description: Number of findings approved by the independent validator.
+    description: Number of findings approved by the separate validation pass.
     value: ${{ steps.publish.outputs.approved_comments }}
   published_comments:
     description: Number of new inline comments published in this run.
@@ -61,12 +37,7 @@ runs:
       id: runtime
       shell: bash
       env:
-        MODEL_API_KEY: ${{ inputs.model_api_key }}
-        MODEL_ID: ${{ inputs.model_id }}
-        MODEL_DISPLAY_NAME: ${{ inputs.model_display_name }}
-        MODEL_BASE_URL: ${{ inputs.model_base_url }}
-        MODEL_PROVIDER: ${{ inputs.model_provider }}
-        MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+        MINIMAX_API_KEY: ${{ inputs.minimax_api_key }}
       run: |
         set -euo pipefail
         umask 077
@@ -79,20 +50,17 @@ runs:
         import os
         from pathlib import Path
 
-        api_key = os.environ.get("MODEL_API_KEY", "").strip()
+        api_key = os.environ.get("MINIMAX_API_KEY", "").strip()
         if not api_key:
-            raise SystemExit("model_api_key is required")
-        max_output_tokens = int(os.environ["MAX_OUTPUT_TOKENS"])
-        if max_output_tokens <= 0:
-            raise SystemExit("max_output_tokens must be positive")
+            raise SystemExit("minimax_api_key is required")
         settings = {
             "customModels": [{
-                "model": os.environ["MODEL_ID"],
-                "displayName": os.environ["MODEL_DISPLAY_NAME"],
-                "baseUrl": os.environ["MODEL_BASE_URL"],
+                "model": "MiniMax-M3",
+                "displayName": "MiniMax-M3",
+                "baseUrl": "https://api.minimax.io/anthropic",
                 "apiKey": api_key,
-                "provider": os.environ["MODEL_PROVIDER"],
-                "maxOutputTokens": max_output_tokens,
+                "provider": "anthropic",
+                "maxOutputTokens": 64000,
                 "noImageSupport": True,
                 "extraArgs": {"temperature": 1},
             }],
@@ -154,10 +122,10 @@ runs:
         REVIEW_IO_WRAPPER: ${{ steps.prepare.outputs.wrapper_path }}
         DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
         FACTORY_API_KEY: ${{ inputs.factory_api_key }}
-        REVIEW_MODEL: ${{ inputs.model_selector }}
+        REVIEW_MODEL: "custom:MiniMax-M3-0"
       run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
 
-    - name: Freeze candidate set for independent validation
+    - name: Freeze candidate set for separate validation
       id: validator
       shell: bash
       env:
@@ -172,7 +140,7 @@ runs:
         REVIEW_IO_WRAPPER: ${{ steps.prepare.outputs.wrapper_path }}
         DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
         FACTORY_API_KEY: ${{ inputs.factory_api_key }}
-        REVIEW_MODEL: ${{ inputs.model_selector }}
+        REVIEW_MODEL: "custom:MiniMax-M3-0"
       run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
 
     - name: Publish typed review result
