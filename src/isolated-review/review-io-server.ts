@@ -11,6 +11,7 @@ import {
 } from "./schemas";
 import {
   atomicJsonWrite,
+  parseDiffAnchors,
   readLines,
   safeWorkspaceFile,
   validateCandidateDocument,
@@ -25,6 +26,7 @@ if (!statePath) {
 const state = ReviewStateSchema.parse(
   JSON.parse(await readFile(statePath, "utf8")),
 );
+const diffAnchors = parseDiffAnchors(await readFile(state.diffPath, "utf8"));
 
 const server = new McpServer({
   name: "Isolated Review IO",
@@ -98,7 +100,7 @@ server.tool(
   async ({ payload }) => {
     try {
       const document = CandidateDocumentSchema.parse(payload);
-      validateCandidateDocument(state, document);
+      validateCandidateDocument(state, document, diffAnchors);
       await atomicJsonWrite(state.candidatesPath, document);
       return textResult("candidate review document accepted");
     } catch (error) {
@@ -117,7 +119,7 @@ server.tool(
         JSON.parse(await readFile(state.candidatesPath, "utf8")),
       );
       const document = ValidatedDocumentSchema.parse(payload);
-      validateValidatedDocument(state, candidates, document);
+      validateValidatedDocument(state, candidates, document, diffAnchors);
       await atomicJsonWrite(state.validatedPath, document);
       return textResult("validated review document accepted");
     } catch (error) {
