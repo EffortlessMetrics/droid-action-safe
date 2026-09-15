@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath, rename, writeFile } from "fs/promises";
+import { link, lstat, readFile, realpath, unlink, writeFile } from "fs/promises";
 import path from "path";
 import type {
   CandidateDocument,
@@ -65,7 +65,13 @@ export async function atomicJsonWrite(
     mode: 0o600,
     flag: "wx",
   });
-  await rename(temporary, target);
+  try {
+    // A hard-link publication is atomic and fails when the fixed output path
+    // already exists. The model cannot revise an accepted document in place.
+    await link(temporary, target);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
 }
 
 export function sameAnchor(
