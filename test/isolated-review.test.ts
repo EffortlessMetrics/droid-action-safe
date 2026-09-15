@@ -1,14 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
+import type { Octokits } from "../src/github/api/client";
+import { fetchAndStoreComments } from "../src/github/data/review-artifacts";
 import {
   CandidateDocumentSchema,
   ReviewStateSchema,
@@ -16,6 +11,7 @@ import {
 } from "../src/isolated-review/schemas";
 import {
   atomicJsonWrite,
+  parseDiffAnchors,
   safeWorkspaceFile,
   validateCandidateDocument,
   validateValidatedDocument,
@@ -23,10 +19,23 @@ import {
 
 const HEAD = "a".repeat(40);
 const ROOT = path.resolve(import.meta.dir, "..");
+const DIFF = `diff --git a/src/lib.ts b/src/lib.ts
+index 1111111..2222222 100644
+--- a/src/lib.ts
++++ b/src/lib.ts
+@@ -8,3 +8,4 @@
+ context
+-old value
++new value
++another value
+ context
+`;
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "droid-isolated-review-"));
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "droid-isolated-review-"),
+  );
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -93,16 +102,16 @@ function validatedFixture() {
     results: [{ status: "approved", comment: candidate }],
     reviewSummary: {
       status: "approved",
-      body: "The candidate was independently reproduced from the diff.",
+      body: "The candidate was reproduced in a separate pass.",
     },
   });
 }
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true }),
-    ),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -110,6 +119,7 @@ describe("isolated review document contracts", () => {
   it("rejects traversal and non-exact commit anchors", async () => {
     const root = await temporaryDirectory();
     const state = stateFixture(root);
+    const anchors = parseDiffAnchors(DIFF);
     const candidate = candidateFixture();
     candidate.comments[0].path = "../secret";
     expect(() => CandidateDocumentSchema.parse(candidate)).toThrow(
@@ -118,18 +128,38 @@ describe("isolated review document contracts", () => {
 
     const wrongHead = candidateFixture();
     wrongHead.comments[0].commit_id = "b".repeat(40);
-    expect(() => validateCandidateDocument(state, wrongHead)).toThrow(
-      "not anchored to the authorized head",
+    expect(() =>
+      validateCandidateDocument(state, wrongHead, anchors),
+    ).toThrow("not anchored to the authorized head");
+  });
+
+  it("rejects anchors and ranges absent from the frozen diff", async () => {
+    const root = await temporaryDirectory();
+    const state = stateFixture(root);
+    const anchors = parseDiffAnchors(DIFF);
+    const candidate = candidateFixture();
+    validateCandidateDocument(state, candidate, anchors);
+
+    candidate.comments[0].line = 200;
+    expect(() => validateCandidateDocument(state, candidate, anchors)).toThrow(
+      "not present in the frozen diff",
+    );
+
+    const inverted = candidateFixture();
+    inverted.comments[0].startLine = 11;
+    expect(() => CandidateDocumentSchema.parse(inverted)).toThrow(
+      "startLine must be less than or equal to line",
     );
   });
 
   it("preserves candidate order and anchors through validation", async () => {
     const root = await temporaryDirectory();
     const state = stateFixture(root);
+    const anchors = parseDiffAnchors(DIFF);
     const candidates = candidateFixture();
     const validated = validatedFixture();
     expect(() =>
-      validateValidatedDocument(state, candidates, validated),
+      validateValidatedDocument(state, candidates, validated, anchors),
     ).not.toThrow();
 
     validated.results[0] = {
@@ -137,7 +167,7 @@ describe("isolated review document contracts", () => {
       comment: { ...candidates.comments[0], line: 11 },
     };
     expect(() =>
-      validateValidatedDocument(state, candidates, validated),
+      validateValidatedDocument(state, candidates, validated, anchors),
     ).toThrow("changed its diff anchor");
   });
 
@@ -150,15 +180,56 @@ describe("isolated review document contracts", () => {
   });
 });
 
+describe("frozen review evidence", () => {
+  it("paginates complete issue and review comment histories", async () => {
+    const root = await temporaryDirectory();
+    const issueComments = Array.from({ length: 120 }, (_, id) => ({ id }));
+    const reviewComments = Array.from({ length: 135 }, (_, id) => ({ id }));
+    const issueEndpoint = () => undefined;
+    const reviewEndpoint = () => undefined;
+    const calls: unknown[] = [];
+    const client = {
+      rest: {
+        paginate: async (endpoint: unknown) => {
+          calls.push(endpoint);
+          return endpoint === issueEndpoint ? issueComments : reviewComments;
+        },
+        rest: {
+          issues: { listComments: issueEndpoint },
+          pulls: { listReviewComments: reviewEndpoint },
+        },
+      },
+    } as unknown as Octokits;
+
+    const commentsPath = await fetchAndStoreComments(
+      client,
+      "EffortlessMetrics",
+      "example",
+      42,
+      root,
+    );
+    const frozen = JSON.parse(await readFile(commentsPath, "utf8"));
+    expect(calls).toEqual([issueEndpoint, reviewEndpoint]);
+    expect(frozen.issueComments).toHaveLength(120);
+    expect(frozen.reviewComments).toHaveLength(135);
+  });
+});
+
 describe("isolated repository read boundary", () => {
   it("allows regular files and rejects symlinks, .git, and parent traversal", async () => {
     const root = await temporaryDirectory();
     const workspace = path.join(root, "workspace");
     await mkdir(path.join(workspace, "src"), { recursive: true });
     await mkdir(path.join(workspace, ".git"), { recursive: true });
-    await writeFile(path.join(workspace, "src", "lib.ts"), "export const value = 1;\n");
+    await writeFile(
+      path.join(workspace, "src", "lib.ts"),
+      "export const value = 1;\n",
+    );
     await writeFile(path.join(root, "outside"), "secret\n");
-    await symlink(path.join(root, "outside"), path.join(workspace, "src", "link"));
+    await symlink(
+      path.join(root, "outside"),
+      path.join(workspace, "src", "link"),
+    );
 
     expect(await safeWorkspaceFile(workspace, "src/lib.ts")).toBe(
       path.join(workspace, "src", "lib.ts"),
@@ -178,9 +249,7 @@ describe("isolated repository read boundary", () => {
 function namedStep(action: string, name: string): string {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = action.match(
-    new RegExp(
-      `(?ms)^    - name: ${escaped}\\n(.*?)(?=^    - name:|\\Z)`,
-    ),
+    new RegExp(`(?ms)^    - name: ${escaped}\\n(.*?)(?=^    - name:|\\Z)`),
   );
   if (!match) throw new Error(`missing action step: ${name}`);
   return match[1];
@@ -202,6 +271,11 @@ describe("isolated action credential boundary", () => {
     );
 
     expect(action).not.toContain("id-token");
+    expect(action).not.toContain("model_base_url");
+    expect(action).toContain('"https://api.minimax.io/anthropic"');
+    expect(action).toContain(
+      'Path(os.environ["DROID_HOME"]) / ".factory" / "settings.json"',
+    );
     expect(runPhase).not.toContain("--skip-permissions-unsafe");
     expect(runPhase).not.toContain("...process.env");
     expect(runPhase).toContain('"--restrict-tools"');
@@ -210,6 +284,8 @@ describe("isolated action credential boundary", () => {
     expect(runPhase).not.toContain('"Execute"');
     expect(runPhase).not.toContain('"Read"');
     expect(prepare).toContain("exec env -i");
+    expect(prepare).toContain('sender?.type !== "User"');
+    expect(prepare).toContain('context.actor.endsWith("[bot]")');
     expect(prepare).not.toContain('setOutput("github_token"');
 
     const candidate = namedStep(
@@ -226,12 +302,12 @@ describe("isolated action credential boundary", () => {
     for (const modelStep of [candidate, validator]) {
       expect(modelStep).toContain("FACTORY_API_KEY");
       expect(modelStep).not.toContain("GITHUB_TOKEN");
-      expect(modelStep).not.toContain("MODEL_API_KEY");
+      expect(modelStep).not.toContain("MINIMAX_API_KEY");
     }
     expect(publisher).toContain("GITHUB_TOKEN");
     expect(publisher).not.toContain("FACTORY_API_KEY");
-    expect(publisher).not.toContain("MODEL_API_KEY");
-    expect(runtime).toContain("MODEL_API_KEY");
+    expect(publisher).not.toContain("MINIMAX_API_KEY");
+    expect(runtime).toContain("MINIMAX_API_KEY");
     expect(runtime).not.toContain("GITHUB_TOKEN");
     expect(runtime).not.toContain("FACTORY_API_KEY");
   });
