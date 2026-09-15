@@ -1,4 +1,11 @@
-import { link, lstat, readFile, realpath, unlink, writeFile } from "fs/promises";
+import {
+  link,
+  lstat,
+  readFile,
+  realpath,
+  unlink,
+  writeFile,
+} from "fs/promises";
 import path from "path";
 import type {
   CandidateDocument,
@@ -7,6 +14,157 @@ import type {
   ValidatedDocument,
 } from "./schemas";
 import { assertDocumentIdentity } from "./schemas";
+
+export type DiffAnchorSet = ReadonlySet<string>;
+
+function diffAnchorKey(
+  filePath: string,
+  side: ReviewComment["side"],
+  line: number,
+): string {
+  return `${filePath}\0${side}\0${line}`;
+}
+
+function decodeGitQuotedPath(value: string): string {
+  if (!value.startsWith('"') || !value.endsWith('"')) {
+    return value;
+  }
+
+  const bytes: number[] = [];
+  const body = value.slice(1, -1);
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index];
+    if (character !== "\\") {
+      bytes.push(...Buffer.from(character));
+      continue;
+    }
+
+    index += 1;
+    if (index >= body.length) {
+      throw new Error("unterminated escape in quoted diff path");
+    }
+    const escaped = body[index];
+    const simple: Record<string, number> = {
+      '"': 0x22,
+      "\\": 0x5c,
+      a: 0x07,
+      b: 0x08,
+      t: 0x09,
+      n: 0x0a,
+      v: 0x0b,
+      f: 0x0c,
+      r: 0x0d,
+    };
+    if (escaped in simple) {
+      bytes.push(simple[escaped]);
+      continue;
+    }
+
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (
+        octal.length < 3 &&
+        index + 1 < body.length &&
+        /[0-7]/.test(body[index + 1])
+      ) {
+        index += 1;
+        octal += body[index];
+      }
+      bytes.push(Number.parseInt(octal, 8));
+      continue;
+    }
+
+    throw new Error(`unsupported escape in quoted diff path: \\${escaped}`);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function parseDiffPath(raw: string): string | null {
+  const decoded = decodeGitQuotedPath(raw.trimEnd());
+  if (decoded === "/dev/null") {
+    return null;
+  }
+  if (decoded.startsWith("a/") || decoded.startsWith("b/")) {
+    return decoded.slice(2);
+  }
+  return decoded;
+}
+
+export function parseDiffAnchors(diff: string): Set<string> {
+  const anchors = new Set<string>();
+  let oldPath: string | null = null;
+  let newPath: string | null = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("diff --git ")) {
+      oldPath = null;
+      newPath = null;
+      inHunk = false;
+      continue;
+    }
+
+    const hunk = line.match(
+      /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/,
+    );
+    if (hunk) {
+      oldLine = Number.parseInt(hunk[1], 10);
+      newLine = Number.parseInt(hunk[2], 10);
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk) {
+      if (line.startsWith("--- ")) {
+        oldPath = parseDiffPath(line.slice(4));
+      } else if (line.startsWith("+++ ")) {
+        newPath = parseDiffPath(line.slice(4));
+      }
+      continue;
+    }
+
+    if (line === "\\ No newline at end of file") {
+      continue;
+    }
+
+    const canonicalPath = newPath ?? oldPath;
+    if (!canonicalPath) {
+      throw new Error("diff hunk has no canonical file path");
+    }
+
+    switch (line[0]) {
+      case " ":
+        if (oldPath) {
+          anchors.add(diffAnchorKey(canonicalPath, "LEFT", oldLine));
+        }
+        if (newPath) {
+          anchors.add(diffAnchorKey(canonicalPath, "RIGHT", newLine));
+        }
+        oldLine += 1;
+        newLine += 1;
+        break;
+      case "-":
+        if (oldPath) {
+          anchors.add(diffAnchorKey(canonicalPath, "LEFT", oldLine));
+        }
+        oldLine += 1;
+        break;
+      case "+":
+        if (newPath) {
+          anchors.add(diffAnchorKey(canonicalPath, "RIGHT", newLine));
+        }
+        newLine += 1;
+        break;
+      default:
+        inHunk = false;
+        break;
+    }
+  }
+
+  return anchors;
+}
 
 export async function readLines(
   filePath: string,
@@ -74,10 +232,7 @@ export async function atomicJsonWrite(
   }
 }
 
-export function sameAnchor(
-  left: ReviewComment,
-  right: ReviewComment,
-): boolean {
+export function sameAnchor(left: ReviewComment, right: ReviewComment): boolean {
   return (
     left.path === right.path &&
     left.line === right.line &&
@@ -87,9 +242,28 @@ export function sameAnchor(
   );
 }
 
+function validateDiffAnchor(
+  anchors: DiffAnchorSet,
+  comment: ReviewComment,
+  label: string,
+): void {
+  const startLine = comment.startLine ?? comment.line;
+  if (comment.line - startLine > 200) {
+    throw new Error(`${label} range exceeds the 201-line review limit`);
+  }
+  for (let line = startLine; line <= comment.line; line += 1) {
+    if (!anchors.has(diffAnchorKey(comment.path, comment.side, line))) {
+      throw new Error(
+        `${label} targets ${comment.path} ${comment.side} line ${line}, which is not present in the frozen diff`,
+      );
+    }
+  }
+}
+
 export function validateCandidateDocument(
   state: ReviewState,
   document: CandidateDocument,
+  anchors: DiffAnchorSet,
 ): void {
   assertDocumentIdentity(state, document.meta);
   for (const [index, comment] of document.comments.entries()) {
@@ -103,6 +277,7 @@ export function validateCandidateDocument(
         `candidate comment ${index} must begin with [P0], [P1], or [P2]`,
       );
     }
+    validateDiffAnchor(anchors, comment, `candidate comment ${index}`);
   }
 }
 
@@ -110,8 +285,9 @@ export function validateValidatedDocument(
   state: ReviewState,
   candidates: CandidateDocument,
   document: ValidatedDocument,
+  anchors: DiffAnchorSet,
 ): void {
-  validateCandidateDocument(state, candidates);
+  validateCandidateDocument(state, candidates, anchors);
   assertDocumentIdentity(state, document.meta);
   if (document.results.length !== candidates.comments.length) {
     throw new Error(
@@ -132,6 +308,7 @@ export function validateValidatedDocument(
           `approved result ${index} must begin with a priority tag`,
         );
       }
+      validateDiffAnchor(anchors, result.comment, `approved result ${index}`);
     } else if (result.candidate.body !== candidate.body) {
       throw new Error(`rejected result ${index} changed the candidate body`);
     }
