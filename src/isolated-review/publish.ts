@@ -10,7 +10,7 @@ import {
   ReviewStateSchema,
   ValidatedDocumentSchema,
 } from "./schemas";
-import { validateValidatedDocument } from "./io";
+import { parseDiffAnchors, validateValidatedDocument } from "./io";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -38,7 +38,8 @@ async function main(): Promise<void> {
   const validated = ValidatedDocumentSchema.parse(
     JSON.parse(await readFile(state.validatedPath, "utf8")),
   );
-  validateValidatedDocument(state, candidates, validated);
+  const diffAnchors = parseDiffAnchors(await readFile(state.diffPath, "utf8"));
+  validateValidatedDocument(state, candidates, validated, diffAnchors);
 
   const approved = validated.results.flatMap((result, index) => {
     if (result.status !== "approved") return [];
@@ -116,7 +117,7 @@ async function main(): Promise<void> {
   const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${state.repository}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
   const publication =
     approved.length === 0
-      ? "No actionable findings survived independent validation."
+      ? "No actionable findings survived the separate validation pass."
       : `${approved.length} actionable finding(s) survived validation; ${pending.length} new inline comment(s) were published.`;
   const trackingBody = [
     "## Droid isolated review",
