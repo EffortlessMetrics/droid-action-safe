@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "fs/promises";
 import os from "os";
 import path from "path";
 import type { Octokits } from "../src/github/api/client";
@@ -146,7 +154,7 @@ describe("isolated review document contracts", () => {
     );
   });
 
-  it("rejects inverted ranges and moved validator anchors", async () => {
+  it("rejects invalid ranges and moved validator anchors", async () => {
     const state = stateFixture(await temporaryDirectory());
     const anchors = parseDiffAnchors(DIFF);
     const candidates = candidateFixture();
@@ -155,10 +163,10 @@ describe("isolated review document contracts", () => {
       validateValidatedDocument(state, candidates, validated, anchors),
     ).not.toThrow();
 
-    const inverted = candidateFixture();
-    firstComment(inverted).startLine = 11;
-    expect(() => CandidateDocumentSchema.parse(inverted)).toThrow(
-      "startLine must be less than or equal to line",
+    const equalStart = candidateFixture();
+    firstComment(equalStart).startLine = 10;
+    expect(() => CandidateDocumentSchema.parse(equalStart)).toThrow(
+      "startLine must be less than line",
     );
 
     const moved = ValidatedDocumentSchema.parse({
@@ -234,8 +242,9 @@ describe("isolated repository read boundary", () => {
       path.join(workspace, "src", "link"),
     );
 
+    const resolvedWorkspace = await realpath(workspace);
     expect(await safeWorkspaceFile(workspace, "src/lib.ts")).toBe(
-      path.join(workspace, "src", "lib.ts"),
+      path.join(resolvedWorkspace, "src", "lib.ts"),
     );
     await expect(safeWorkspaceFile(workspace, "src/link")).rejects.toThrow(
       "regular non-symlink file",
@@ -276,6 +285,7 @@ describe("isolated action credential boundary", () => {
     expect(action).not.toContain("id-token");
     expect(action).not.toContain("model_base_url");
     expect(action).toContain('"https://api.minimax.io/anthropic"');
+    expect(action).toContain("phase_timeout_minutes:");
     expect(action).toContain(
       'Path(os.environ["DROID_HOME"]) / ".factory" / "settings.json"',
     );
@@ -284,6 +294,8 @@ describe("isolated action credential boundary", () => {
     expect(runPhase).toContain('"--restrict-tools"');
     expect(runPhase).toContain('"--disable-builtin-skills"');
     expect(runPhase).toContain('"--cwd"');
+    expect(runPhase).toContain('child.kill("SIGTERM")');
+    expect(runPhase).toContain('child.kill("SIGKILL")');
     expect(runPhase).not.toContain('"Execute"');
     expect(runPhase).not.toContain('"Read"');
     expect(prepare).toContain("exec env -i");
@@ -304,6 +316,7 @@ describe("isolated action credential boundary", () => {
 
     for (const modelStep of [candidate, validator]) {
       expect(modelStep).toContain("FACTORY_API_KEY");
+      expect(modelStep).toContain("REVIEW_PHASE_TIMEOUT_MINUTES");
       expect(modelStep).not.toContain("GITHUB_TOKEN");
       expect(modelStep).not.toContain("MINIMAX_API_KEY");
     }
