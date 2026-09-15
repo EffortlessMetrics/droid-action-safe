@@ -206,7 +206,9 @@ async function main(): Promise<void> {
       JSON.parse(await readFile(target, "utf8")),
     );
     assertDocumentIdentity(state, document.meta);
-    core.info(`Candidate generation produced ${document.comments.length} item(s).`);
+    core.info(
+      `Candidate generation produced ${document.comments.length} item(s).`,
+    );
   } else {
     const document = ValidatedDocumentSchema.parse(
       JSON.parse(await readFile(target, "utf8")),
@@ -218,6 +220,8 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  core.setFailed(`isolated ${process.env.REVIEW_PHASE ?? "review"} phase failed: ${message}`);
+  core.setFailed(
+    `isolated ${process.env.REVIEW_PHASE ?? "review"} phase failed: ${message}`,
+  );
   process.exitCode = 1;
 });
