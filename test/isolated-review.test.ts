@@ -128,9 +128,9 @@ describe("isolated review document contracts", () => {
 
     const wrongHead = candidateFixture();
     wrongHead.comments[0].commit_id = "b".repeat(40);
-    expect(() =>
-      validateCandidateDocument(state, wrongHead, anchors),
-    ).toThrow("not anchored to the authorized head");
+    expect(() => validateCandidateDocument(state, wrongHead, anchors)).toThrow(
+      "not anchored to the authorized head",
+    );
   });
 
   it("rejects anchors and ranges absent from the frozen diff", async () => {
