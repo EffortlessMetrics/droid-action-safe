@@ -33,7 +33,7 @@ function decodeGitQuotedPath(value: string): string {
   const bytes: number[] = [];
   const body = value.slice(1, -1);
   for (let index = 0; index < body.length; index += 1) {
-    const character = body[index];
+    const character = body.charAt(index);
     if (character !== "\\") {
       bytes.push(...Buffer.from(character));
       continue;
@@ -43,7 +43,7 @@ function decodeGitQuotedPath(value: string): string {
     if (index >= body.length) {
       throw new Error("unterminated escape in quoted diff path");
     }
-    const escaped = body[index];
+    const escaped = body.charAt(index);
     const simple: Record<string, number> = {
       '"': 0x22,
       "\\": 0x5c,
@@ -55,8 +55,9 @@ function decodeGitQuotedPath(value: string): string {
       f: 0x0c,
       r: 0x0d,
     };
-    if (escaped in simple) {
-      bytes.push(simple[escaped]);
+    const simpleByte = simple[escaped];
+    if (simpleByte !== undefined) {
+      bytes.push(simpleByte);
       continue;
     }
 
@@ -65,10 +66,10 @@ function decodeGitQuotedPath(value: string): string {
       while (
         octal.length < 3 &&
         index + 1 < body.length &&
-        /[0-7]/.test(body[index + 1])
+        /[0-7]/.test(body.charAt(index + 1))
       ) {
         index += 1;
-        octal += body[index];
+        octal += body.charAt(index);
       }
       bytes.push(Number.parseInt(octal, 8));
       continue;
@@ -108,8 +109,13 @@ export function parseDiffAnchors(diff: string): Set<string> {
 
     const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
-      oldLine = Number.parseInt(hunk[1], 10);
-      newLine = Number.parseInt(hunk[2], 10);
+      const oldStart = hunk[1];
+      const newStart = hunk[2];
+      if (oldStart === undefined || newStart === undefined) {
+        throw new Error(`malformed diff hunk header: ${line}`);
+      }
+      oldLine = Number.parseInt(oldStart, 10);
+      newLine = Number.parseInt(newStart, 10);
       inHunk = true;
       continue;
     }
@@ -132,7 +138,7 @@ export function parseDiffAnchors(diff: string): Set<string> {
       throw new Error("diff hunk has no canonical file path");
     }
 
-    switch (line[0]) {
+    switch (line.charAt(0)) {
       case " ":
         if (oldPath) {
           anchors.add(diffAnchorKey(canonicalPath, "LEFT", oldLine));
@@ -295,6 +301,9 @@ export function validateValidatedDocument(
 
   document.results.forEach((result, index) => {
     const candidate = candidates.comments[index];
+    if (!candidate) {
+      throw new Error(`validated result ${index} has no candidate`);
+    }
     const reviewed =
       result.status === "approved" ? result.comment : result.candidate;
     if (!sameAnchor(candidate, reviewed)) {
