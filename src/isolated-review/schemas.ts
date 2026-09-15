@@ -10,14 +10,24 @@ const relativePath = z
     "path must not traverse upward",
   );
 
-export const ReviewCommentSchema = z.object({
-  path: relativePath,
-  body: z.string().min(1).max(12_000),
-  line: z.number().int().positive(),
-  startLine: z.number().int().positive().nullable().optional().default(null),
-  side: z.enum(["RIGHT", "LEFT"]),
-  commit_id: z.string().regex(/^[0-9a-f]{40}$/),
-});
+export const ReviewCommentSchema = z
+  .object({
+    path: relativePath,
+    body: z.string().min(1).max(12_000),
+    line: z.number().int().positive(),
+    startLine: z.number().int().positive().nullable().optional().default(null),
+    side: z.enum(["RIGHT", "LEFT"]),
+    commit_id: z.string().regex(/^[0-9a-f]{40}$/),
+  })
+  .superRefine((comment, context) => {
+    if (comment.startLine !== null && comment.startLine > comment.line) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["startLine"],
+        message: "startLine must be less than or equal to line",
+      });
+    }
+  });
 
 export const CandidateDocumentSchema = z.object({
   version: z.literal(1),
