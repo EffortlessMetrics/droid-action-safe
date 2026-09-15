@@ -9,24 +9,13 @@ import {
   CandidateDocumentSchema,
   ReviewStateSchema,
   ValidatedDocumentSchema,
-  assertDocumentIdentity,
-  type ReviewComment,
 } from "./schemas";
+import { validateValidatedDocument } from "./io";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
-}
-
-function sameAnchor(left: ReviewComment, right: ReviewComment): boolean {
-  return (
-    left.path === right.path &&
-    left.line === right.line &&
-    (left.startLine ?? null) === (right.startLine ?? null) &&
-    left.side === right.side &&
-    left.commit_id === right.commit_id
-  );
 }
 
 function safePublishedText(value: string): string {
@@ -49,20 +38,9 @@ async function main(): Promise<void> {
   const validated = ValidatedDocumentSchema.parse(
     JSON.parse(await readFile(state.validatedPath, "utf8")),
   );
-  assertDocumentIdentity(state, candidates.meta);
-  assertDocumentIdentity(state, validated.meta);
-
-  if (validated.results.length !== candidates.comments.length) {
-    throw new Error("validated result count changed after the model boundary");
-  }
+  validateValidatedDocument(state, candidates, validated);
 
   const approved = validated.results.flatMap((result, index) => {
-    const candidate = candidates.comments[index];
-    const reviewed =
-      result.status === "approved" ? result.comment : result.candidate;
-    if (!sameAnchor(candidate, reviewed)) {
-      throw new Error(`validated result ${index} changed its diff anchor`);
-    }
     if (result.status !== "approved") return [];
 
     const body = safePublishedText(result.comment.body);
@@ -136,9 +114,10 @@ async function main(): Promise<void> {
   if (!summary) throw new Error("validated review summary became empty");
   const rejected = validated.results.length - approved.length;
   const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${state.repository}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-  const publication = approved.length === 0
-    ? "No actionable findings survived independent validation."
-    : `${approved.length} actionable finding(s) survived validation; ${pending.length} new inline comment(s) were published.`;
+  const publication =
+    approved.length === 0
+      ? "No actionable findings survived independent validation."
+      : `${approved.length} actionable finding(s) survived validation; ${pending.length} new inline comment(s) were published.`;
   const trackingBody = [
     "## Droid isolated review",
     "",
