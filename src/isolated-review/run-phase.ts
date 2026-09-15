@@ -19,6 +19,17 @@ function required(name: string): string {
   return value;
 }
 
+function phaseTimeoutMs(): number {
+  const raw = required("REVIEW_PHASE_TIMEOUT_MINUTES");
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 20) {
+    throw new Error(
+      "REVIEW_PHASE_TIMEOUT_MINUTES must be an integer from 1 through 20",
+    );
+  }
+  return minutes * 60_000;
+}
+
 function secretFreeEnv(factoryApiKey: string): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = {};
   const retained = [
@@ -64,6 +75,7 @@ async function runDroid(
   args: string[],
   env: NodeJS.ProcessEnv,
   secrets: string[],
+  timeoutMs: number,
 ): Promise<void> {
   const child = spawn(executable, args, {
     cwd: env.HOME,
@@ -74,6 +86,8 @@ async function runDroid(
   let stderr = "";
   let sawResult = false;
   let resultFailed = false;
+  let timedOut = false;
+  let forceKill: ReturnType<typeof setTimeout> | undefined;
   const lines = readline.createInterface({ input: child.stdout });
   lines.on("line", (line) => {
     if (!line.trim()) return;
@@ -112,12 +126,27 @@ async function runDroid(
     if (stderr.length > 32_000) stderr = stderr.slice(-32_000);
   });
 
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
-  });
-  lines.close();
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+    forceKill = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  }, timeoutMs);
 
+  let exitCode: number;
+  try {
+    exitCode = await new Promise<number>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (code) => resolve(code ?? 1));
+    });
+  } finally {
+    clearTimeout(deadline);
+    if (forceKill) clearTimeout(forceKill);
+    lines.close();
+  }
+
+  if (timedOut) {
+    throw new Error(`Droid review phase timed out after ${timeoutMs} ms`);
+  }
   if (exitCode !== 0 || resultFailed || !sawResult) {
     throw new Error(
       `Droid review phase failed (exit=${exitCode}, result=${sawResult}, result_error=${resultFailed}): ${redact(stderr, secrets)}`,
@@ -136,6 +165,7 @@ async function main(): Promise<void> {
   const executable = required("DROID_EXECUTABLE");
   const wrapper = required("REVIEW_IO_WRAPPER");
   const model = required("REVIEW_MODEL");
+  const timeoutMs = phaseTimeoutMs();
   const state = ReviewStateSchema.parse(
     JSON.parse(await readFile(required("REVIEW_STATE_PATH"), "utf8")),
   );
@@ -199,6 +229,7 @@ async function main(): Promise<void> {
     ],
     env,
     [factoryApiKey],
+    timeoutMs,
   );
 
   if (phase === "candidate") {
