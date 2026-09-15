@@ -5,6 +5,35 @@ import type { ReviewArtifacts } from "../../create-prompt/types";
 
 const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50MB buffer for large diffs
 
+type CommentEndpoint = (
+  params: Record<string, unknown>,
+) => Promise<{ data: unknown[] }>;
+
+type CommentRestClient = {
+  paginate?: (
+    endpoint: CommentEndpoint,
+    params: Record<string, unknown>,
+  ) => Promise<unknown[]>;
+  rest?: {
+    issues: { listComments: CommentEndpoint };
+    pulls: { listReviewComments: CommentEndpoint };
+  };
+  issues?: { listComments: CommentEndpoint };
+  pulls?: { listReviewComments: CommentEndpoint };
+};
+
+async function listAllComments(
+  client: CommentRestClient,
+  endpoint: CommentEndpoint,
+  params: Record<string, unknown>,
+): Promise<unknown[]> {
+  if (client.paginate) {
+    return client.paginate(endpoint, params);
+  }
+  const response = await endpoint(params);
+  return response.data;
+}
+
 /**
  * Compute the PR diff and store it on disk.
  *
@@ -91,14 +120,26 @@ export async function fetchAndStoreComments(
   const promptsDir = `${tempDir}/droid-prompts`;
   await mkdir(promptsDir, { recursive: true });
 
+  // Production Octokit exposes endpoints under `.rest`, while older focused
+  // test doubles expose them directly. Pagination is mandatory whenever the
+  // real client supplies it; the direct path preserves the narrow unit seam.
+  const client = octokit.rest as unknown as CommentRestClient;
+  const endpoints = client.rest ?? {
+    issues: client.issues,
+    pulls: client.pulls,
+  };
+  if (!endpoints.issues || !endpoints.pulls) {
+    throw new Error("Octokit comment endpoints are unavailable");
+  }
+
   const [issueComments, reviewComments] = await Promise.all([
-    octokit.rest.paginate(octokit.rest.rest.issues.listComments, {
+    listAllComments(client, endpoints.issues.listComments, {
       owner,
       repo,
       issue_number: prNumber,
       per_page: 100,
     }),
-    octokit.rest.paginate(octokit.rest.rest.pulls.listReviewComments, {
+    listAllComments(client, endpoints.pulls.listReviewComments, {
       owner,
       repo,
       pull_number: prNumber,
