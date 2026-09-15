@@ -2,11 +2,8 @@
 
 import * as core from "@actions/core";
 import { readFile, writeFile } from "fs/promises";
-import {
-  CandidateDocumentSchema,
-  ReviewStateSchema,
-  assertDocumentIdentity,
-} from "./schemas";
+import { CandidateDocumentSchema, ReviewStateSchema } from "./schemas";
+import { validateCandidateDocument } from "./io";
 import { validatorPrompt } from "./prompts";
 
 function required(name: string): string {
@@ -23,7 +20,7 @@ async function main(): Promise<void> {
   const candidates = CandidateDocumentSchema.parse(
     JSON.parse(await readFile(state.candidatesPath, "utf8")),
   );
-  assertDocumentIdentity(state, candidates.meta);
+  validateCandidateDocument(state, candidates);
 
   await writeFile(state.validatorPromptPath, validatorPrompt(state), {
     encoding: "utf8",
