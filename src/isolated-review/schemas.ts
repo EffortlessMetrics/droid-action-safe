@@ -20,11 +20,11 @@ export const ReviewCommentSchema = z
     commit_id: z.string().regex(/^[0-9a-f]{40}$/),
   })
   .superRefine((comment, context) => {
-    if (comment.startLine !== null && comment.startLine > comment.line) {
+    if (comment.startLine !== null && comment.startLine >= comment.line) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["startLine"],
-        message: "startLine must be less than or equal to line",
+        message: "startLine must be less than line",
       });
     }
   });
