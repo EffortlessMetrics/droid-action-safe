@@ -8,6 +8,8 @@ import {
   CandidateDocumentSchema,
   ReviewStateSchema,
   ValidatedDocumentSchema,
+  type CandidateDocument,
+  type ReviewComment,
 } from "../src/isolated-review/schemas";
 import {
   atomicJsonWrite,
@@ -64,7 +66,7 @@ function stateFixture(root: string) {
   });
 }
 
-function candidateFixture() {
+function candidateFixture(): CandidateDocument {
   return CandidateDocumentSchema.parse({
     version: 1,
     meta: {
@@ -88,8 +90,16 @@ function candidateFixture() {
   });
 }
 
+function firstComment(document: CandidateDocument): ReviewComment {
+  const comment = document.comments[0];
+  if (!comment) {
+    throw new Error("fixture candidate is missing its first comment");
+  }
+  return comment;
+}
+
 function validatedFixture() {
-  const candidate = candidateFixture().comments[0];
+  const candidate = firstComment(candidateFixture());
   return ValidatedDocumentSchema.parse({
     version: 1,
     meta: {
@@ -121,13 +131,13 @@ describe("isolated review document contracts", () => {
     const state = stateFixture(root);
     const anchors = parseDiffAnchors(DIFF);
     const candidate = candidateFixture();
-    candidate.comments[0].path = "../secret";
+    firstComment(candidate).path = "../secret";
     expect(() => CandidateDocumentSchema.parse(candidate)).toThrow(
       "path must not traverse upward",
     );
 
     const wrongHead = candidateFixture();
-    wrongHead.comments[0].commit_id = "b".repeat(40);
+    firstComment(wrongHead).commit_id = "b".repeat(40);
     expect(() => validateCandidateDocument(state, wrongHead, anchors)).toThrow(
       "not anchored to the authorized head",
     );
@@ -140,13 +150,13 @@ describe("isolated review document contracts", () => {
     const candidate = candidateFixture();
     validateCandidateDocument(state, candidate, anchors);
 
-    candidate.comments[0].line = 200;
+    firstComment(candidate).line = 200;
     expect(() => validateCandidateDocument(state, candidate, anchors)).toThrow(
       "not present in the frozen diff",
     );
 
     const inverted = candidateFixture();
-    inverted.comments[0].startLine = 11;
+    firstComment(inverted).startLine = 11;
     expect(() => CandidateDocumentSchema.parse(inverted)).toThrow(
       "startLine must be less than or equal to line",
     );
@@ -162,12 +172,17 @@ describe("isolated review document contracts", () => {
       validateValidatedDocument(state, candidates, validated, anchors),
     ).not.toThrow();
 
-    validated.results[0] = {
-      status: "approved",
-      comment: { ...candidates.comments[0], line: 11 },
-    };
+    const moved = ValidatedDocumentSchema.parse({
+      ...validated,
+      results: [
+        {
+          status: "approved",
+          comment: { ...firstComment(candidates), line: 11 },
+        },
+      ],
+    });
     expect(() =>
-      validateValidatedDocument(state, candidates, validated, anchors),
+      validateValidatedDocument(state, candidates, moved, anchors),
     ).toThrow("changed its diff anchor");
   });
 
@@ -251,8 +266,9 @@ function namedStep(action: string, name: string): string {
   const match = action.match(
     new RegExp(`(?ms)^    - name: ${escaped}\\n(.*?)(?=^    - name:|\\Z)`),
   );
-  if (!match) throw new Error(`missing action step: ${name}`);
-  return match[1];
+  const body = match?.[1];
+  if (!body) throw new Error(`missing action step: ${name}`);
+  return body;
 }
 
 describe("isolated action credential boundary", () => {
