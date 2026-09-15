@@ -21,6 +21,10 @@ inputs:
     description: Exact Droid CLI version reported by the supplied executable.
     required: false
     default: "0.219.0"
+  phase_timeout_minutes:
+    description: Hard deadline for each isolated Droid model phase, from 1 through 20 minutes.
+    required: false
+    default: "10"
 
 outputs:
   approved_comments:
@@ -123,6 +127,7 @@ runs:
         DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
         FACTORY_API_KEY: ${{ inputs.factory_api_key }}
         REVIEW_MODEL: "custom:MiniMax-M3-0"
+        REVIEW_PHASE_TIMEOUT_MINUTES: ${{ inputs.phase_timeout_minutes }}
       run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
 
     - name: Freeze candidate set for separate validation
@@ -141,6 +146,7 @@ runs:
         DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
         FACTORY_API_KEY: ${{ inputs.factory_api_key }}
         REVIEW_MODEL: "custom:MiniMax-M3-0"
+        REVIEW_PHASE_TIMEOUT_MINUTES: ${{ inputs.phase_timeout_minutes }}
       run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
 
     - name: Publish typed review result
