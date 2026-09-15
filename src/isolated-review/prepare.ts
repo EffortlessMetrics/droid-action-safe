@@ -47,7 +47,7 @@ async function main(): Promise<void> {
 
   const clients = createOctokit(token);
   const authorized = await checkWritePermissions(
-    clients.rest.rest,
+    clients.rest,
     context,
     "",
     true,
@@ -162,11 +162,10 @@ async function main(): Promise<void> {
     "review-io-server.ts",
   );
   const safePath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
-  const wrapper = `#!/usr/bin/env bash\nset -euo pipefail\nexec env -i PATH=${shellQuote(safePath)} HOME=${shellQuote(process.env.HOME ?? root)} REVIEW_STATE_PATH=${shellQuote(statePath)} bun run ${shellQuote(serverPath)}\n`;
+  const wrapper = `#!/usr/bin/env bash\nset -euo pipefail\nexec env -i PATH=${shellQuote(safePath)} HOME=${shellQuote(isolatedCwd)} REVIEW_STATE_PATH=${shellQuote(statePath)} bun run ${shellQuote(serverPath)}\n`;
   await writeFile(wrapperPath, wrapper, { mode: 0o700 });
   await chmod(wrapperPath, 0o700);
 
-  core.setOutput("github_token", token);
   core.setOutput("state_path", statePath);
   core.setOutput("wrapper_path", wrapperPath);
   core.setOutput("tracking_comment_id", trackingComment.id.toString());
