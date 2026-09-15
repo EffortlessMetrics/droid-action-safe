@@ -5,19 +5,19 @@ import path from "path";
 import type { Octokits } from "../src/github/api/client";
 import { fetchAndStoreComments } from "../src/github/data/review-artifacts";
 import {
-  CandidateDocumentSchema,
-  ReviewStateSchema,
-  ValidatedDocumentSchema,
-  type CandidateDocument,
-  type ReviewComment,
-} from "../src/isolated-review/schemas";
-import {
   atomicJsonWrite,
   parseDiffAnchors,
   safeWorkspaceFile,
   validateCandidateDocument,
   validateValidatedDocument,
 } from "../src/isolated-review/io";
+import {
+  CandidateDocumentSchema,
+  ReviewStateSchema,
+  ValidatedDocumentSchema,
+  type CandidateDocument,
+  type ReviewComment,
+} from "../src/isolated-review/schemas";
 
 const HEAD = "a".repeat(40);
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -92,14 +92,11 @@ function candidateFixture(): CandidateDocument {
 
 function firstComment(document: CandidateDocument): ReviewComment {
   const comment = document.comments[0];
-  if (!comment) {
-    throw new Error("fixture candidate is missing its first comment");
-  }
+  if (!comment) throw new Error("fixture candidate is missing its first comment");
   return comment;
 }
 
 function validatedFixture() {
-  const candidate = firstComment(candidateFixture());
   return ValidatedDocumentSchema.parse({
     version: 1,
     meta: {
@@ -109,7 +106,7 @@ function validatedFixture() {
       baseRef: "main",
       validatedAt: "2026-09-15T20:01:00Z",
     },
-    results: [{ status: "approved", comment: candidate }],
+    results: [{ status: "approved", comment: firstComment(candidateFixture()) }],
     reviewSummary: {
       status: "approved",
       body: "The candidate was reproduced in a separate pass.",
@@ -126,51 +123,43 @@ afterEach(async () => {
 });
 
 describe("isolated review document contracts", () => {
-  it("rejects traversal and non-exact commit anchors", async () => {
-    const root = await temporaryDirectory();
-    const state = stateFixture(root);
+  it("rejects traversal, stale commits, and anchors absent from the diff", async () => {
+    const state = stateFixture(await temporaryDirectory());
     const anchors = parseDiffAnchors(DIFF);
-    const candidate = candidateFixture();
-    firstComment(candidate).path = "../secret";
-    expect(() => CandidateDocumentSchema.parse(candidate)).toThrow(
+
+    const traversal = candidateFixture();
+    firstComment(traversal).path = "../secret";
+    expect(() => CandidateDocumentSchema.parse(traversal)).toThrow(
       "path must not traverse upward",
     );
 
-    const wrongHead = candidateFixture();
-    firstComment(wrongHead).commit_id = "b".repeat(40);
-    expect(() => validateCandidateDocument(state, wrongHead, anchors)).toThrow(
+    const stale = candidateFixture();
+    firstComment(stale).commit_id = "b".repeat(40);
+    expect(() => validateCandidateDocument(state, stale, anchors)).toThrow(
       "not anchored to the authorized head",
     );
-  });
 
-  it("rejects anchors and ranges absent from the frozen diff", async () => {
-    const root = await temporaryDirectory();
-    const state = stateFixture(root);
-    const anchors = parseDiffAnchors(DIFF);
-    const candidate = candidateFixture();
-    validateCandidateDocument(state, candidate, anchors);
-
-    firstComment(candidate).line = 200;
-    expect(() => validateCandidateDocument(state, candidate, anchors)).toThrow(
+    const outsideDiff = candidateFixture();
+    firstComment(outsideDiff).line = 200;
+    expect(() => validateCandidateDocument(state, outsideDiff, anchors)).toThrow(
       "not present in the frozen diff",
     );
-
-    const inverted = candidateFixture();
-    firstComment(inverted).startLine = 11;
-    expect(() => CandidateDocumentSchema.parse(inverted)).toThrow(
-      "startLine must be less than or equal to line",
-    );
   });
 
-  it("preserves candidate order and anchors through validation", async () => {
-    const root = await temporaryDirectory();
-    const state = stateFixture(root);
+  it("rejects inverted ranges and moved validator anchors", async () => {
+    const state = stateFixture(await temporaryDirectory());
     const anchors = parseDiffAnchors(DIFF);
     const candidates = candidateFixture();
     const validated = validatedFixture();
     expect(() =>
       validateValidatedDocument(state, candidates, validated, anchors),
     ).not.toThrow();
+
+    const inverted = candidateFixture();
+    firstComment(inverted).startLine = 11;
+    expect(() => CandidateDocumentSchema.parse(inverted)).toThrow(
+      "startLine must be less than or equal to line",
+    );
 
     const moved = ValidatedDocumentSchema.parse({
       ...validated,
@@ -187,8 +176,7 @@ describe("isolated review document contracts", () => {
   });
 
   it("publishes each model document only once", async () => {
-    const root = await temporaryDirectory();
-    const target = path.join(root, "candidate.json");
+    const target = path.join(await temporaryDirectory(), "candidate.json");
     await atomicJsonWrite(target, candidateFixture());
     expect(JSON.parse(await readFile(target, "utf8")).version).toBe(1);
     await expect(atomicJsonWrite(target, candidateFixture())).rejects.toThrow();
@@ -200,8 +188,8 @@ describe("frozen review evidence", () => {
     const root = await temporaryDirectory();
     const issueComments = Array.from({ length: 120 }, (_, id) => ({ id }));
     const reviewComments = Array.from({ length: 135 }, (_, id) => ({ id }));
-    const issueEndpoint = () => undefined;
-    const reviewEndpoint = () => undefined;
+    const issueEndpoint = () => Promise.resolve({ data: issueComments });
+    const reviewEndpoint = () => Promise.resolve({ data: reviewComments });
     const calls: unknown[] = [];
     const client = {
       rest: {
@@ -262,13 +250,12 @@ describe("isolated repository read boundary", () => {
 });
 
 function namedStep(action: string, name: string): string {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = action.match(
-    new RegExp(`(?ms)^    - name: ${escaped}\\n(.*?)(?=^    - name:|\\Z)`),
-  );
-  const body = match?.[1];
-  if (!body) throw new Error(`missing action step: ${name}`);
-  return body;
+  const marker = `    - name: ${name}\n`;
+  const start = action.indexOf(marker);
+  if (start < 0) throw new Error(`missing action step: ${name}`);
+  const bodyStart = start + marker.length;
+  const next = action.indexOf("    - name: ", bodyStart);
+  return action.slice(bodyStart, next < 0 ? action.length : next);
 }
 
 describe("isolated action credential boundary", () => {
