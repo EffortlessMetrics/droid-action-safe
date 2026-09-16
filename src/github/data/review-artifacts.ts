@@ -1,9 +1,38 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { writeFile, mkdir } from "fs/promises";
 import type { Octokits } from "../api/client";
 import type { ReviewArtifacts } from "../../create-prompt/types";
 
 const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50MB buffer for large diffs
+
+type CommentEndpoint = (
+  params: Record<string, unknown>,
+) => Promise<{ data: unknown[] }>;
+
+type CommentRestClient = {
+  paginate?: (
+    endpoint: CommentEndpoint,
+    params: Record<string, unknown>,
+  ) => Promise<unknown[]>;
+  rest?: {
+    issues: { listComments: CommentEndpoint };
+    pulls: { listReviewComments: CommentEndpoint };
+  };
+  issues?: { listComments: CommentEndpoint };
+  pulls?: { listReviewComments: CommentEndpoint };
+};
+
+async function listAllComments(
+  client: CommentRestClient,
+  endpoint: CommentEndpoint,
+  params: Record<string, unknown>,
+): Promise<unknown[]> {
+  if (client.paginate) {
+    return client.paginate(endpoint, params);
+  }
+  const response = await endpoint(params);
+  return response.data;
+}
 
 /**
  * Compute the PR diff and store it on disk.
@@ -22,48 +51,59 @@ export async function computeAndStoreDiff(
 
   let diff: string;
   try {
-    // Unshallow the repo if it's a shallow clone (needed for merge-base)
+    // Unshallow the repo if it's a shallow clone (needed for merge-base).
     try {
-      execSync("git rev-parse --is-shallow-repository", {
-        encoding: "utf8",
-        stdio: "pipe",
-      }).trim() === "true" &&
-        execSync("git fetch --unshallow", {
+      const shallow = execFileSync(
+        "git",
+        ["rev-parse", "--is-shallow-repository"],
+        {
+          encoding: "utf8",
+          stdio: "pipe",
+        },
+      ).trim();
+      if (shallow === "true") {
+        execFileSync("git", ["fetch", "--unshallow"], {
           encoding: "utf8",
           stdio: "pipe",
         });
-      console.log("Unshallowed repository");
+        console.log("Unshallowed repository");
+      } else {
+        console.log("Repository already has full history");
+      }
     } catch {
       console.log("Repository already has full history");
     }
 
-    // Fetch the base branch (it may not exist locally yet)
+    // Fetch the base branch without invoking a shell. GitHub controls baseRef,
+    // but it is still untrusted pull-request metadata at this boundary.
     try {
-      execSync(`git fetch origin ${baseRef}:refs/remotes/origin/${baseRef}`, {
-        encoding: "utf8",
-        stdio: "pipe",
-      });
+      execFileSync(
+        "git",
+        ["fetch", "--", "origin", `${baseRef}:refs/remotes/origin/${baseRef}`],
+        { encoding: "utf8", stdio: "pipe" },
+      );
       console.log(`Fetched base branch: ${baseRef}`);
     } catch {
       console.log(`Base branch fetch skipped (may already exist): ${baseRef}`);
     }
 
-    const mergeBase = execSync(
-      `git merge-base HEAD refs/remotes/origin/${baseRef}`,
+    const mergeBase = execFileSync(
+      "git",
+      ["merge-base", "HEAD", `refs/remotes/origin/${baseRef}`],
       { encoding: "utf8" },
     ).trim();
 
-    diff = execSync(`git --no-pager diff ${mergeBase}..HEAD`, {
+    diff = execFileSync("git", ["--no-pager", "diff", `${mergeBase}..HEAD`], {
       encoding: "utf8",
       maxBuffer: DIFF_MAX_BUFFER,
     });
   } catch {
-    // Fallback: use gh CLI to get the diff (works even with shallow clones)
+    // Fallback: use gh CLI to get the diff (works even with shallow clones).
     if (options?.githubToken && options?.prNumber) {
       console.log(
         "Git merge-base failed, falling back to gh pr diff for PR diff",
       );
-      diff = execSync(`gh pr diff ${options.prNumber}`, {
+      diff = execFileSync("gh", ["pr", "diff", String(options.prNumber)], {
         encoding: "utf8",
         maxBuffer: DIFF_MAX_BUFFER,
         env: { ...process.env, GH_TOKEN: options.githubToken },
@@ -91,14 +131,26 @@ export async function fetchAndStoreComments(
   const promptsDir = `${tempDir}/droid-prompts`;
   await mkdir(promptsDir, { recursive: true });
 
+  // Production Octokit exposes endpoints under `.rest`, while older focused
+  // test doubles expose them directly. Pagination is mandatory whenever the
+  // real client supplies it; the direct path preserves the narrow unit seam.
+  const client = octokit.rest as unknown as CommentRestClient;
+  const endpoints = client.rest ?? {
+    issues: client.issues,
+    pulls: client.pulls,
+  };
+  if (!endpoints.issues || !endpoints.pulls) {
+    throw new Error("Octokit comment endpoints are unavailable");
+  }
+
   const [issueComments, reviewComments] = await Promise.all([
-    octokit.rest.issues.listComments({
+    listAllComments(client, endpoints.issues.listComments, {
       owner,
       repo,
       issue_number: prNumber,
       per_page: 100,
     }),
-    octokit.rest.pulls.listReviewComments({
+    listAllComments(client, endpoints.pulls.listReviewComments, {
       owner,
       repo,
       pull_number: prNumber,
@@ -107,14 +159,14 @@ export async function fetchAndStoreComments(
   ]);
 
   const comments = {
-    issueComments: issueComments.data,
-    reviewComments: reviewComments.data,
+    issueComments,
+    reviewComments,
   };
 
   const commentsPath = `${promptsDir}/existing_comments.json`;
   await writeFile(commentsPath, JSON.stringify(comments, null, 2));
   console.log(
-    `Stored existing comments (${issueComments.data.length} issue, ${reviewComments.data.length} review) at ${commentsPath}`,
+    `Stored existing comments (${issueComments.length} issue, ${reviewComments.length} review) at ${commentsPath}`,
   );
   return commentsPath;
 }

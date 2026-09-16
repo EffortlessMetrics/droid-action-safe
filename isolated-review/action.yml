@@ -1,0 +1,173 @@
+name: Droid Isolated Review
+description: Run a two-pass pull-request review without exposing GitHub or provider credentials to the model tool boundary.
+
+inputs:
+  github_token:
+    description: GitHub token used only by deterministic preparation and publication steps.
+    required: true
+  factory_api_key:
+    description: Factory credential used only by the Droid CLI process.
+    required: true
+  minimax_api_key:
+    description: MiniMax credential serialized into the private runtime home for the fixed M3 endpoint.
+    required: true
+  expected_head_sha:
+    description: Exact same-repository pull-request head authorized for review.
+    required: true
+  path_to_droid_executable:
+    description: Path to an independently verified Droid CLI executable.
+    required: true
+  expected_droid_version:
+    description: Exact Droid CLI version reported by the supplied executable.
+    required: false
+    default: "0.219.0"
+  phase_timeout_minutes:
+    description: Hard deadline for each isolated Droid model phase, from 1 through 20 minutes.
+    required: false
+    default: "10"
+
+outputs:
+  approved_comments:
+    description: Number of findings approved by the separate validation pass.
+    value: ${{ steps.publish.outputs.approved_comments }}
+  published_comments:
+    description: Number of new inline comments published in this run.
+    value: ${{ steps.publish.outputs.published_comments }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create private isolated runtime
+      id: runtime
+      shell: bash
+      env:
+        MINIMAX_API_KEY: ${{ inputs.minimax_api_key }}
+      run: |
+        set -euo pipefail
+        umask 077
+        runtime_home=$(mktemp -d "${RUNNER_TEMP:?}/droid-isolated-home.XXXXXXXX")
+        echo "home=$runtime_home" >> "$GITHUB_OUTPUT"
+        mkdir -p "$runtime_home/.factory" "$runtime_home/.config" "$runtime_home/.cache" "$runtime_home/.bun"
+
+        DROID_HOME="$runtime_home" python3 - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        api_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+        if not api_key:
+            raise SystemExit("minimax_api_key is required")
+        settings = {
+            "customModels": [{
+                "model": "MiniMax-M3",
+                "displayName": "MiniMax-M3",
+                "baseUrl": "https://api.minimax.io/anthropic",
+                "apiKey": api_key,
+                "provider": "anthropic",
+                "maxOutputTokens": 64000,
+                "noImageSupport": True,
+                "extraArgs": {"temperature": 1},
+            }],
+            "disableAutoUpdate": True,
+            "enableAllProjectMcpServers": False,
+        }
+        path = Path(os.environ["DROID_HOME"]) / ".factory" / "settings.json"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as output:
+            json.dump(settings, output)
+            output.write("\n")
+        PY
+
+        {
+          echo "HOME=$runtime_home"
+          echo "XDG_CONFIG_HOME=$runtime_home/.config"
+          echo "XDG_CACHE_HOME=$runtime_home/.cache"
+          echo "BUN_INSTALL=$runtime_home/.bun"
+          echo "FACTORY_DROID_AUTO_UPDATE_ENABLED=false"
+        } >> "$GITHUB_ENV"
+
+    - name: Set up pinned Bun
+      uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+      with:
+        bun-version: 1.2.11
+
+    - name: Install pinned action dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_ACTION_PATH/.."
+        bun install --frozen-lockfile
+
+    - name: Verify supplied Droid executable
+      shell: bash
+      env:
+        DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
+        EXPECTED_DROID_VERSION: ${{ inputs.expected_droid_version }}
+      run: |
+        set -euo pipefail
+        test -x "$DROID_EXECUTABLE"
+        reported=$("$DROID_EXECUTABLE" --version)
+        printf '%s\n' "$reported"
+        test "$reported" = "$EXPECTED_DROID_VERSION"
+
+    - name: Freeze authorized review inputs
+      id: prepare
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/prepare.ts"
+
+    - name: Generate review candidates in isolated model boundary
+      shell: bash
+      env:
+        REVIEW_PHASE: candidate
+        REVIEW_STATE_PATH: ${{ steps.prepare.outputs.state_path }}
+        REVIEW_IO_WRAPPER: ${{ steps.prepare.outputs.wrapper_path }}
+        DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
+        FACTORY_API_KEY: ${{ inputs.factory_api_key }}
+        REVIEW_MODEL: "custom:MiniMax-M3-0"
+        REVIEW_PHASE_TIMEOUT_MINUTES: ${{ inputs.phase_timeout_minutes }}
+      run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
+
+    - name: Freeze candidate set for separate validation
+      id: validator
+      shell: bash
+      env:
+        REVIEW_STATE_PATH: ${{ steps.prepare.outputs.state_path }}
+      run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/prepare-validator.ts"
+
+    - name: Validate review candidates in isolated model boundary
+      shell: bash
+      env:
+        REVIEW_PHASE: validator
+        REVIEW_STATE_PATH: ${{ steps.prepare.outputs.state_path }}
+        REVIEW_IO_WRAPPER: ${{ steps.prepare.outputs.wrapper_path }}
+        DROID_EXECUTABLE: ${{ inputs.path_to_droid_executable }}
+        FACTORY_API_KEY: ${{ inputs.factory_api_key }}
+        REVIEW_MODEL: "custom:MiniMax-M3-0"
+        REVIEW_PHASE_TIMEOUT_MINUTES: ${{ inputs.phase_timeout_minutes }}
+      run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/run-phase.ts"
+
+    - name: Publish typed review result
+      id: publish
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        REVIEW_STATE_PATH: ${{ steps.prepare.outputs.state_path }}
+      run: bun run "$GITHUB_ACTION_PATH/../src/isolated-review/publish.ts"
+
+    - name: Remove private isolated runtime
+      if: always()
+      shell: bash
+      env:
+        DROID_HOME: ${{ steps.runtime.outputs.home }}
+      run: |
+        set -euo pipefail
+        if [ -n "$DROID_HOME" ]; then
+          case "$DROID_HOME" in
+            "${RUNNER_TEMP:?}"/droid-isolated-home.*) rm -rf -- "$DROID_HOME" ;;
+            *) echo "::error::Refusing unexpected Droid runtime cleanup path"; exit 1 ;;
+          esac
+        fi
+        rm -rf -- "${RUNNER_TEMP:?}/droid-isolated-review"
