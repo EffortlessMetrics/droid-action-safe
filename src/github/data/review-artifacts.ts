@@ -79,12 +79,7 @@ export async function computeAndStoreDiff(
     try {
       execFileSync(
         "git",
-        [
-          "fetch",
-          "--",
-          "origin",
-          `${baseRef}:refs/remotes/origin/${baseRef}`,
-        ],
+        ["fetch", "--", "origin", `${baseRef}:refs/remotes/origin/${baseRef}`],
         { encoding: "utf8", stdio: "pipe" },
       );
       console.log(`Fetched base branch: ${baseRef}`);
