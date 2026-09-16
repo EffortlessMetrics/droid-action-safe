@@ -10,10 +10,7 @@ import {
   ValidatedDocumentSchema,
   assertDocumentIdentity,
 } from "./schemas";
-import {
-  REVIEW_SERVER_NAME,
-  discoverReviewToolIds,
-} from "./tool-discovery";
+import { REVIEW_SERVER_NAME, discoverReviewToolIds } from "./tool-discovery";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
