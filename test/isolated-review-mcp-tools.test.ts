@@ -12,12 +12,12 @@ describe("isolated review MCP tool IDs", () => {
     );
 
     expect(runPhase).toContain(
-      'const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;',
+      "const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;",
     );
-    expect(runPhase).toContain('`${MCP_TOOL_PREFIX}read_artifact`');
-    expect(runPhase).toContain('`${MCP_TOOL_PREFIX}read_repo_file`');
-    expect(runPhase).toContain('`${MCP_TOOL_PREFIX}write_candidates`');
-    expect(runPhase).toContain('`${MCP_TOOL_PREFIX}write_validated`');
+    expect(runPhase).toContain("`${MCP_TOOL_PREFIX}read_artifact`");
+    expect(runPhase).toContain("`${MCP_TOOL_PREFIX}read_repo_file`");
+    expect(runPhase).toContain("`${MCP_TOOL_PREFIX}write_candidates`");
+    expect(runPhase).toContain("`${MCP_TOOL_PREFIX}write_validated`");
     expect(runPhase).not.toContain("review_io___");
   });
 });
