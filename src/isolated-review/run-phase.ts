@@ -12,6 +12,7 @@ import {
 } from "./schemas";
 
 const SERVER_NAME = "review_io";
+const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -201,11 +202,11 @@ async function main(): Promise<void> {
       : state.validatorPromptPath;
   const writeTool =
     phase === "candidate"
-      ? `${SERVER_NAME}___write_candidates`
-      : `${SERVER_NAME}___write_validated`;
+      ? `${MCP_TOOL_PREFIX}write_candidates`
+      : `${MCP_TOOL_PREFIX}write_validated`;
   const tools = [
-    `${SERVER_NAME}___read_artifact`,
-    `${SERVER_NAME}___read_repo_file`,
+    `${MCP_TOOL_PREFIX}read_artifact`,
+    `${MCP_TOOL_PREFIX}read_repo_file`,
     writeTool,
   ];
 
