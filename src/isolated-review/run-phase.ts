@@ -10,9 +10,10 @@ import {
   ValidatedDocumentSchema,
   assertDocumentIdentity,
 } from "./schemas";
-
-const SERVER_NAME = "review_io";
-const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;
+import {
+  REVIEW_SERVER_NAME,
+  discoverReviewToolIds,
+} from "./tool-discovery";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -175,7 +176,7 @@ async function main(): Promise<void> {
   if (phase === "candidate") {
     const registration = spawnSync(
       executable,
-      ["mcp", "add", SERVER_NAME, wrapper, "--type", "stdio"],
+      ["mcp", "add", REVIEW_SERVER_NAME, wrapper, "--type", "stdio"],
       { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     if (registration.status !== 0) {
@@ -201,14 +202,16 @@ async function main(): Promise<void> {
       ? state.candidatePromptPath
       : state.validatorPromptPath;
   const writeTool =
-    phase === "candidate"
-      ? `${MCP_TOOL_PREFIX}write_candidates`
-      : `${MCP_TOOL_PREFIX}write_validated`;
-  const tools = [
-    `${MCP_TOOL_PREFIX}read_artifact`,
-    `${MCP_TOOL_PREFIX}read_repo_file`,
-    writeTool,
-  ];
+    phase === "candidate" ? "write_candidates" : "write_validated";
+  const tools = discoverReviewToolIds({
+    executable,
+    model,
+    cwd: state.isolatedCwd,
+    env,
+    expectedTools: ["read_artifact", "read_repo_file", writeTool],
+    redact: (text) => redact(text, [factoryApiKey]),
+  });
+  core.info(`Using isolated review tools: ${tools.join(",")}`);
 
   await runDroid(
     executable,
