@@ -26,19 +26,18 @@ describe("review-artifacts", () => {
 
   describe("computeAndStoreDiff", () => {
     it("computes diff via git merge-base and writes to disk", async () => {
-      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(((
-        file: string,
-        args?: readonly string[],
-      ) => {
-        const command = [file, ...(args ?? [])].join(" ");
-        if (command.includes("is-shallow-repository")) return "false\n";
-        if (command.includes("fetch -- origin main")) return "";
-        if (command.includes("merge-base")) return "abc123\n";
-        if (command.includes("--no-pager diff")) {
-          return "diff --git a/f.ts b/f.ts\n+line\n";
-        }
-        return "";
-      }) as typeof childProcess.execFileSync);
+      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(
+        ((file: string, args?: readonly string[]) => {
+          const command = [file, ...(args ?? [])].join(" ");
+          if (command.includes("is-shallow-repository")) return "false\n";
+          if (command.includes("fetch -- origin main")) return "";
+          if (command.includes("merge-base")) return "abc123\n";
+          if (command.includes("--no-pager diff")) {
+            return "diff --git a/f.ts b/f.ts\n+line\n";
+          }
+          return "";
+        }) as typeof childProcess.execFileSync,
+      );
 
       const result = await computeAndStoreDiff("main", "/tmp/test");
 
@@ -55,21 +54,23 @@ describe("review-artifacts", () => {
     });
 
     it("falls back to gh pr diff when merge-base fails", async () => {
-      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(((
-        file: string,
-        args?: readonly string[],
-        opts?: { env?: NodeJS.ProcessEnv },
-      ) => {
-        const command = [file, ...(args ?? [])].join(" ");
-        if (command.includes("is-shallow-repository")) return "false\n";
-        if (command.includes("merge-base")) throw new Error("no merge base");
-        if (file === "gh" && args?.[0] === "pr" && args?.[1] === "diff") {
-          expect(opts?.env?.GH_TOKEN).toBe("test-token");
-          expect(args[2]).toBe("42");
-          return "diff from gh cli\n";
-        }
-        return "";
-      }) as typeof childProcess.execFileSync);
+      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(
+        ((
+          file: string,
+          args?: readonly string[],
+          opts?: { env?: NodeJS.ProcessEnv },
+        ) => {
+          const command = [file, ...(args ?? [])].join(" ");
+          if (command.includes("is-shallow-repository")) return "false\n";
+          if (command.includes("merge-base")) throw new Error("no merge base");
+          if (file === "gh" && args?.[0] === "pr" && args?.[1] === "diff") {
+            expect(opts?.env?.GH_TOKEN).toBe("test-token");
+            expect(args[2]).toBe("42");
+            return "diff from gh cli\n";
+          }
+          return "";
+        }) as typeof childProcess.execFileSync,
+      );
 
       const result = await computeAndStoreDiff("main", "/tmp/test", {
         githubToken: "test-token",
@@ -85,15 +86,14 @@ describe("review-artifacts", () => {
     });
 
     it("throws when merge-base fails and no fallback credentials", async () => {
-      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(((
-        file: string,
-        args?: readonly string[],
-      ) => {
-        const command = [file, ...(args ?? [])].join(" ");
-        if (command.includes("is-shallow-repository")) return "false\n";
-        if (command.includes("merge-base")) throw new Error("no merge base");
-        return "";
-      }) as typeof childProcess.execFileSync);
+      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(
+        ((file: string, args?: readonly string[]) => {
+          const command = [file, ...(args ?? [])].join(" ");
+          if (command.includes("is-shallow-repository")) return "false\n";
+          if (command.includes("merge-base")) throw new Error("no merge base");
+          return "";
+        }) as typeof childProcess.execFileSync,
+      );
 
       await expect(computeAndStoreDiff("main", "/tmp/test")).rejects.toThrow(
         "no fallback credentials",
@@ -173,16 +173,15 @@ describe("review-artifacts", () => {
 
   describe("computeReviewArtifacts", () => {
     it("runs all three artifact computations in parallel", async () => {
-      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(((
-        file: string,
-        args?: readonly string[],
-      ) => {
-        const command = [file, ...(args ?? [])].join(" ");
-        if (command.includes("is-shallow-repository")) return "false\n";
-        if (command.includes("merge-base")) return "abc123\n";
-        if (command.includes("--no-pager diff")) return "some diff\n";
-        return "";
-      }) as typeof childProcess.execFileSync);
+      execFileSyncSpy = spyOn(childProcess, "execFileSync").mockImplementation(
+        ((file: string, args?: readonly string[]) => {
+          const command = [file, ...(args ?? [])].join(" ");
+          if (command.includes("is-shallow-repository")) return "false\n";
+          if (command.includes("merge-base")) return "abc123\n";
+          if (command.includes("--no-pager diff")) return "some diff\n";
+          return "";
+        }) as typeof childProcess.execFileSync,
+      );
 
       const mockOctokit = {
         rest: {
