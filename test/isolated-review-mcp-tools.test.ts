@@ -11,7 +11,9 @@ describe("isolated review MCP tool IDs", () => {
       "utf8",
     );
 
-    expect(runPhase).toContain('const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;');
+    expect(runPhase).toContain(
+      'const MCP_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;',
+    );
     expect(runPhase).toContain('`${MCP_TOOL_PREFIX}read_artifact`');
     expect(runPhase).toContain('`${MCP_TOOL_PREFIX}read_repo_file`');
     expect(runPhase).toContain('`${MCP_TOOL_PREFIX}write_candidates`');
