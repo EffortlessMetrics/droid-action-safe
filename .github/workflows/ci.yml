@@ -34,8 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           if ! bun run format:check; then
-            bunx prettier --write src/github/data/review-artifacts.ts test/isolated-review.test.ts
-            git diff -- src/github/data/review-artifacts.ts test/isolated-review.test.ts
+            bunx prettier --write test/isolated-review.test.ts
+            git diff -- test/isolated-review.test.ts
             exit 1
           fi
 
