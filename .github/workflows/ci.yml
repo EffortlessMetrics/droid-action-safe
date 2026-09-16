@@ -31,13 +31,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Check formatting
-        run: |
-          set -euo pipefail
-          if ! bun run format:check; then
-            bunx prettier --write test/github/data/review-artifacts.test.ts
-            git diff -- test/github/data/review-artifacts.test.ts
-            exit 1
-          fi
+        run: bun run format:check
 
       - name: Typecheck
         run: bun run typecheck
