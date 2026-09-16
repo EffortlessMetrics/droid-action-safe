@@ -100,7 +100,8 @@ function candidateFixture(): CandidateDocument {
 
 function firstComment(document: CandidateDocument): ReviewComment {
   const comment = document.comments[0];
-  if (!comment) throw new Error("fixture candidate is missing its first comment");
+  if (!comment)
+    throw new Error("fixture candidate is missing its first comment");
   return comment;
 }
 
@@ -114,7 +115,9 @@ function validatedFixture() {
       baseRef: "main",
       validatedAt: "2026-09-15T20:01:00Z",
     },
-    results: [{ status: "approved", comment: firstComment(candidateFixture()) }],
+    results: [
+      { status: "approved", comment: firstComment(candidateFixture()) },
+    ],
     reviewSummary: {
       status: "approved",
       body: "The candidate was reproduced in a separate pass.",
@@ -149,9 +152,9 @@ describe("isolated review document contracts", () => {
 
     const outsideDiff = candidateFixture();
     firstComment(outsideDiff).line = 200;
-    expect(() => validateCandidateDocument(state, outsideDiff, anchors)).toThrow(
-      "not present in the frozen diff",
-    );
+    expect(() =>
+      validateCandidateDocument(state, outsideDiff, anchors),
+    ).toThrow("not present in the frozen diff");
   });
 
   it("rejects invalid ranges and moved validator anchors", async () => {
@@ -281,6 +284,10 @@ describe("isolated action credential boundary", () => {
       path.join(ROOT, "src", "isolated-review", "prepare.ts"),
       "utf8",
     );
+    const reviewArtifacts = await readFile(
+      path.join(ROOT, "src", "github", "data", "review-artifacts.ts"),
+      "utf8",
+    );
 
     expect(action).not.toContain("id-token");
     expect(action).not.toContain("model_base_url");
@@ -302,6 +309,8 @@ describe("isolated action credential boundary", () => {
     expect(prepare).toContain('sender?.type !== "User"');
     expect(prepare).toContain('context.actor.endsWith("[bot]")');
     expect(prepare).not.toContain('setOutput("github_token"');
+    expect(reviewArtifacts).toContain("execFileSync");
+    expect(reviewArtifacts).not.toContain("execSync(");
 
     const candidate = namedStep(
       action,
