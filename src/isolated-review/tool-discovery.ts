@@ -44,7 +44,9 @@ export function selectReviewToolIds(
         `review_io tool discovery mismatch for ${tool}: expected exactly one advertised identifier; discovered=${JSON.stringify(visible)}`,
       );
     }
-    selected.push(matches[0]);
+    const match = matches[0];
+    if (!match) throw new Error(`review_io tool discovery lost ${tool}`);
+    selected.push(match);
   }
   return selected;
 }
