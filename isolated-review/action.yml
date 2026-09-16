@@ -70,6 +70,7 @@ runs:
             }],
             "disableAutoUpdate": True,
             "enableAllProjectMcpServers": False,
+            "blockOnMcpLoad": True,
         }
         path = Path(os.environ["DROID_HOME"]) / ".factory" / "settings.json"
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
