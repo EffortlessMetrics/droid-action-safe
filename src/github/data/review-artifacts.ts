@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { writeFile, mkdir } from "fs/promises";
 import type { Octokits } from "../api/client";
 import type { ReviewArtifacts } from "../../create-prompt/types";
@@ -51,48 +51,64 @@ export async function computeAndStoreDiff(
 
   let diff: string;
   try {
-    // Unshallow the repo if it's a shallow clone (needed for merge-base)
+    // Unshallow the repo if it's a shallow clone (needed for merge-base).
     try {
-      execSync("git rev-parse --is-shallow-repository", {
-        encoding: "utf8",
-        stdio: "pipe",
-      }).trim() === "true" &&
-        execSync("git fetch --unshallow", {
+      const shallow = execFileSync(
+        "git",
+        ["rev-parse", "--is-shallow-repository"],
+        {
+          encoding: "utf8",
+          stdio: "pipe",
+        },
+      ).trim();
+      if (shallow === "true") {
+        execFileSync("git", ["fetch", "--unshallow"], {
           encoding: "utf8",
           stdio: "pipe",
         });
-      console.log("Unshallowed repository");
+        console.log("Unshallowed repository");
+      } else {
+        console.log("Repository already has full history");
+      }
     } catch {
       console.log("Repository already has full history");
     }
 
-    // Fetch the base branch (it may not exist locally yet)
+    // Fetch the base branch without invoking a shell. GitHub controls baseRef,
+    // but it is still untrusted pull-request metadata at this boundary.
     try {
-      execSync(`git fetch origin ${baseRef}:refs/remotes/origin/${baseRef}`, {
-        encoding: "utf8",
-        stdio: "pipe",
-      });
+      execFileSync(
+        "git",
+        [
+          "fetch",
+          "--",
+          "origin",
+          `${baseRef}:refs/remotes/origin/${baseRef}`,
+        ],
+        { encoding: "utf8", stdio: "pipe" },
+      );
       console.log(`Fetched base branch: ${baseRef}`);
     } catch {
       console.log(`Base branch fetch skipped (may already exist): ${baseRef}`);
     }
 
-    const mergeBase = execSync(
-      `git merge-base HEAD refs/remotes/origin/${baseRef}`,
+    const mergeBase = execFileSync(
+      "git",
+      ["merge-base", "HEAD", `refs/remotes/origin/${baseRef}`],
       { encoding: "utf8" },
     ).trim();
 
-    diff = execSync(`git --no-pager diff ${mergeBase}..HEAD`, {
+    diff = execFileSync("git", ["--no-pager", "diff", `${mergeBase}..HEAD`], {
       encoding: "utf8",
       maxBuffer: DIFF_MAX_BUFFER,
     });
   } catch {
-    // Fallback: use gh CLI to get the diff (works even with shallow clones)
+    // Fallback: use gh CLI to get the diff (works even with shallow clones).
     if (options?.githubToken && options?.prNumber) {
       console.log(
         "Git merge-base failed, falling back to gh pr diff for PR diff",
       );
-      diff = execSync(`gh pr diff ${options.prNumber}`, {
+      diff = execFileSync("gh", ["pr", "diff", String(options.prNumber)], {
         encoding: "utf8",
         maxBuffer: DIFF_MAX_BUFFER,
         env: { ...process.env, GH_TOKEN: options.githubToken },
